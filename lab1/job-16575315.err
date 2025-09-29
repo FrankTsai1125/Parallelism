@@ -1,0 +1,5 @@
+slurmstepd: error: execve(): /home/p13922006/lab1/./hello: No such file or directory
+slurmstepd: error: execve(): /home/p13922006/lab1/./hello: No such file or directory
+slurmstepd: error: execve(): /home/p13922006/lab1/./hello: No such file or directory
+slurmstepd: error: execve(): /home/p13922006/lab1/./hello: No such file or directory
+srun: error: cpn3033: tasks 0-3: Exited with exit code 2

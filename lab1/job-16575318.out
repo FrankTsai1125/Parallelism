@@ -1,0 +1,16 @@
+[1757985946.232350] [cpn3033:1423510:0]     ucp_context.c:1019 UCX  WARN  network device 'mlx5_4:1' is not available, please use one or more of: 'bond0'(tcp), 'ib0'(tcp), 'lo'(tcp), 'mlx5_0:1'(ib), 'mlx5_bond_0:1'(ib), 'vlan304'(tcp)
+[1757985946.286486] [cpn3033:1423510:0]     ucp_context.c:1019 UCX  WARN  network device 'mlx5_4:1' is not available, please use one or more of: 'bond0'(tcp), 'ib0'(tcp), 'lo'(tcp), 'mlx5_0:1'(ib), 'mlx5_bond_0:1'(ib), 'vlan304'(tcp)
+[1757985946.354147] [cpn3033:1423510:0]     ucp_context.c:1019 UCX  WARN  network device 'mlx5_4:1' is not available, please use one or more of: 'bond0'(tcp), 'ib0'(tcp), 'lo'(tcp), 'mlx5_0:1'(ib), 'mlx5_bond_0:1'(ib), 'vlan304'(tcp)
+Hello world from process 0/4
+[1757985946.229261] [cpn3033:1423511:0]     ucp_context.c:1019 UCX  WARN  network device 'mlx5_4:1' is not available, please use one or more of: 'bond0'(tcp), 'ib0'(tcp), 'lo'(tcp), 'mlx5_0:1'(ib), 'mlx5_bond_0:1'(ib), 'vlan304'(tcp)
+[1757985946.295185] [cpn3033:1423511:0]     ucp_context.c:1019 UCX  WARN  network device 'mlx5_4:1' is not available, please use one or more of: 'bond0'(tcp), 'ib0'(tcp), 'lo'(tcp), 'mlx5_0:1'(ib), 'mlx5_bond_0:1'(ib), 'vlan304'(tcp)
+[1757985946.354227] [cpn3033:1423511:0]     ucp_context.c:1019 UCX  WARN  network device 'mlx5_4:1' is not available, please use one or more of: 'bond0'(tcp), 'ib0'(tcp), 'lo'(tcp), 'mlx5_0:1'(ib), 'mlx5_bond_0:1'(ib), 'vlan304'(tcp)
+Hello world from process 1/4
+[1757985946.229298] [cpn3033:1423512:0]     ucp_context.c:1019 UCX  WARN  network device 'mlx5_4:1' is not available, please use one or more of: 'bond0'(tcp), 'ib0'(tcp), 'lo'(tcp), 'mlx5_0:1'(ib), 'mlx5_bond_0:1'(ib), 'vlan304'(tcp)
+[1757985946.295185] [cpn3033:1423512:0]     ucp_context.c:1019 UCX  WARN  network device 'mlx5_4:1' is not available, please use one or more of: 'bond0'(tcp), 'ib0'(tcp), 'lo'(tcp), 'mlx5_0:1'(ib), 'mlx5_bond_0:1'(ib), 'vlan304'(tcp)
+[1757985946.354147] [cpn3033:1423512:0]     ucp_context.c:1019 UCX  WARN  network device 'mlx5_4:1' is not available, please use one or more of: 'bond0'(tcp), 'ib0'(tcp), 'lo'(tcp), 'mlx5_0:1'(ib), 'mlx5_bond_0:1'(ib), 'vlan304'(tcp)
+Hello world from process 2/4
+[1757985946.229261] [cpn3033:1423513:0]     ucp_context.c:1019 UCX  WARN  network device 'mlx5_4:1' is not available, please use one or more of: 'bond0'(tcp), 'ib0'(tcp), 'lo'(tcp), 'mlx5_0:1'(ib), 'mlx5_bond_0:1'(ib), 'vlan304'(tcp)
+[1757985946.286500] [cpn3033:1423513:0]     ucp_context.c:1019 UCX  WARN  network device 'mlx5_4:1' is not available, please use one or more of: 'bond0'(tcp), 'ib0'(tcp), 'lo'(tcp), 'mlx5_0:1'(ib), 'mlx5_bond_0:1'(ib), 'vlan304'(tcp)
+[1757985946.354176] [cpn3033:1423513:0]     ucp_context.c:1019 UCX  WARN  network device 'mlx5_4:1' is not available, please use one or more of: 'bond0'(tcp), 'ib0'(tcp), 'lo'(tcp), 'mlx5_0:1'(ib), 'mlx5_bond_0:1'(ib), 'vlan304'(tcp)
+Hello world from process 3/4
