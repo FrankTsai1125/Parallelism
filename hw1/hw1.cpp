@@ -390,15 +390,8 @@ bool applyMoves(const State &start, const string &moves, State &out) {
     return true;
 }
 
-string solve(const string &filename) {
-    State initialState = loadState(filename);
-    if (hasFragileTile) {
-        return "";
-    }
-    if (isSolved(initialState)) {
-        return "";
-    }
-    if (isDeadState(initialState)) {
+string solveWithBFS(const State &initialState, bool enableDeadCheck) {
+    if (enableDeadCheck && isDeadState(initialState)) {
         return "";
     }
 
@@ -461,7 +454,7 @@ string solve(const string &filename) {
                     if (!tryMove(afterWalk, dir, pushed)) {
                         continue;
                     }
-                    if (isDeadState(pushed)) {
+                    if (enableDeadCheck && isDeadState(pushed)) {
                         continue;
                     }
 
@@ -481,8 +474,30 @@ string solve(const string &filename) {
             }
         }
     }
-
     return "";
+}
+
+string solveRegular(const State &initialState) {
+    return solveWithBFS(initialState, true);
+}
+
+string solveSpecialTerrain(const State &initialState) {
+    return solveWithBFS(initialState, false);
+}
+
+string solve(const string &filename) {
+    State initialState = loadState(filename);
+    if (isSolved(initialState)) {
+        return "";
+    }
+
+    if (hasFragileTile) {
+        return solveSpecialTerrain(initialState);
+    }
+    if (isDeadState(initialState)) {
+        return "";
+    }
+    return solveRegular(initialState);
 }
 
 int main(int argc, char *argv[]) {
