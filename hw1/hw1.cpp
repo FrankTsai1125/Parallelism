@@ -1,13 +1,18 @@
 #include <algorithm>
 #include <cctype>
+#include <climits>
 #include <fstream>
 #include <iostream>
 #include <queue>
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <omp.h>
 
 using namespace std;
+
+// Debug flag: set to true to monitor thread workload (disable for production)
+#define DEBUG_THREAD_LOAD false
 
 struct State {
     vector<string> board;
@@ -37,6 +42,7 @@ namespace {
 vector<string> baseBoard;
 vector<vector<bool>> targetMap;
 vector<vector<bool>> deadCellMap;
+vector<pair<int, int>> targetPositions;
 int ROWS = 0;
 int COLS = 0;
 bool hasFragileTile = false;
@@ -53,30 +59,32 @@ inline bool isWallForBox(int y, int x) {
     return tile == '#' || tile == '@';
 }
 
-void computeDeadCells() {
+// Improved Simple Deadlock Detection (conservative approach)
+// Combines corner/corridor detection with limited reverse reachability
+void computeSimpleDeadlocks() {
     deadCellMap.assign(ROWS, vector<bool>(COLS, false));
     if (ROWS == 0 || COLS == 0) {
         return;
     }
 
+    // Step 1: Mark corner deadlocks (always safe)
     for (int y = 0; y < ROWS; ++y) {
         for (int x = 0; x < COLS; ++x) {
-            if (baseBoard[y][x] == '#') {
-                continue;
-            }
-            if (targetMap[y][x]) {
+            if (baseBoard[y][x] == '#' || targetMap[y][x]) {
                 continue;
             }
             bool up = isWallForBox(y - 1, x);
             bool down = isWallForBox(y + 1, x);
             bool left = isWallForBox(y, x - 1);
             bool right = isWallForBox(y, x + 1);
+            // Corner deadlocks
             if ((up && left) || (up && right) || (down && left) || (down && right)) {
                 deadCellMap[y][x] = true;
             }
         }
     }
 
+    // Step 2: Mark corridor deadlocks (horizontal)
     for (int y = 0; y < ROWS; ++y) {
         int x = 0;
         while (x < COLS) {
@@ -109,6 +117,7 @@ void computeDeadCells() {
         }
     }
 
+    // Step 3: Mark corridor deadlocks (vertical)
     for (int x = 0; x < COLS; ++x) {
         int y = 0;
         while (y < ROWS) {
@@ -197,7 +206,19 @@ State loadState(const string &filename) {
 
     ROWS = static_cast<int>(baseBoard.size());
     COLS = ROWS > 0 ? static_cast<int>(baseBoard[0].size()) : 0;
-    computeDeadCells();
+    
+    // Precompute target positions for heuristic (must be done before deadlock detection)
+    targetPositions.clear();
+    for (int y = 0; y < ROWS; ++y) {
+        for (int x = 0; x < COLS; ++x) {
+            if (targetMap[y][x]) {
+                targetPositions.push_back({y, x});
+            }
+        }
+    }
+    
+    // Compute simple deadlocks using reverse BFS from goals
+    computeSimpleDeadlocks();
 
     return state;
 }
@@ -213,18 +234,164 @@ bool isSolved(const State &state) {
     return true;
 }
 
+// Check if position contains wall or box
+inline bool isWallOrBox(const State &state, int y, int x) {
+    if (!isWithin(y, x)) return true;
+    char c = state.board[y][x];
+    return c == '#' || c == 'x' || c == 'X';
+}
+
+// Simple 2x2 deadlock: 4 boxes forming a square, not all on targets
+bool has2x2Deadlock(const State &state, int y, int x) {
+    if (state.board[y][x] != 'x') return false;
+    
+    // Only check if this box is top-left of a 2x2
+    if (!isWithin(y+1, x+1)) return false;
+    
+    // Check if we have a 2x2 square of boxes
+    bool b00 = (state.board[y][x] == 'x' || state.board[y][x] == 'X');
+    bool b01 = (state.board[y][x+1] == 'x' || state.board[y][x+1] == 'X');
+    bool b10 = (state.board[y+1][x] == 'x' || state.board[y+1][x] == 'X');
+    bool b11 = (state.board[y+1][x+1] == 'x' || state.board[y+1][x+1] == 'X');
+    
+    // If all 4 positions have boxes
+    if (b00 && b01 && b10 && b11) {
+        // Count how many are on targets
+        int onTarget = 0;
+        if (state.board[y][x] == 'X') onTarget++;
+        if (state.board[y][x+1] == 'X') onTarget++;
+        if (state.board[y+1][x] == 'X') onTarget++;
+        if (state.board[y+1][x+1] == 'X') onTarget++;
+        
+        // If not all on target, count total targets in this 2x2
+        if (onTarget < 4) {
+            int targets = 0;
+            if (targetMap[y][x]) targets++;
+            if (targetMap[y][x+1]) targets++;
+            if (targetMap[y+1][x]) targets++;
+            if (targetMap[y+1][x+1]) targets++;
+            
+            // Deadlock if less than 4 targets (can't all reach targets)
+            if (targets < 4) return true;
+        }
+    }
+    
+    return false;
+}
+
+// Check if position is a wall (NOT box)
+inline bool isWall(int y, int x) {
+    if (!isWithin(y, x)) return true;
+    return baseBoard[y][x] == '#' || baseBoard[y][x] == '@';
+}
+
+// Check if box is frozen by walls only (not other boxes)
+bool isFrozenBox(const State &state, int y, int x) {
+    if (state.board[y][x] != 'x') return false;
+    if (targetMap[y][x]) return false; // Already on target, not a problem
+    
+    // Check if frozen in BOTH directions by WALLS only (truly stuck permanently)
+    bool frozenH = (isWall(y, x-1) && isWall(y, x+1));
+    bool frozenV = (isWall(y-1, x) && isWall(y+1, x));
+    
+    // Only deadlock if frozen in BOTH horizontal AND vertical by walls
+    return frozenH && frozenV;
+}
+
+// Check if box is in a line deadlock along a wall
+bool isLineDeadlock(const State &state, int y, int x) {
+    if (state.board[y][x] != 'x') return false;
+    if (targetMap[y][x]) return false;
+    
+    // Check horizontal line along wall
+    if (isWallForBox(y-1, x) || isWallForBox(y+1, x)) {
+        // Count consecutive boxes along wall
+        int left = 0, right = 0;
+        int targetsLeft = 0, targetsRight = 0;
+        
+        // Check left
+        for (int dx = -1; x + dx >= 0; dx--) {
+            char c = state.board[y][x+dx];
+            if (c == 'x') {
+                left++;
+                if (!targetMap[y][x+dx]) continue;
+                else { targetsLeft++; break; }
+            } else if (c == 'X') {
+                left++; targetsLeft++; break;
+            } else break;
+        }
+        
+        // Check right
+        for (int dx = 1; x + dx < COLS; dx++) {
+            char c = state.board[y][x+dx];
+            if (c == 'x') {
+                right++;
+                if (!targetMap[y][x+dx]) continue;
+                else { targetsRight++; break; }
+            } else if (c == 'X') {
+                right++; targetsRight++; break;
+            } else break;
+        }
+        
+        // If blocked on both sides without targets, it's deadlock
+        if (left + right >= 1 && targetsLeft == 0 && targetsRight == 0) {
+            return true;
+        }
+    }
+    
+    // Check vertical line along wall
+    if (isWallForBox(y, x-1) || isWallForBox(y, x+1)) {
+        int up = 0, down = 0;
+        int targetsUp = 0, targetsDown = 0;
+        
+        // Check up
+        for (int dy = -1; y + dy >= 0; dy--) {
+            char c = state.board[y+dy][x];
+            if (c == 'x') {
+                up++;
+                if (!targetMap[y+dy][x]) continue;
+                else { targetsUp++; break; }
+            } else if (c == 'X') {
+                up++; targetsUp++; break;
+            } else break;
+        }
+        
+        // Check down
+        for (int dy = 1; y + dy < ROWS; dy++) {
+            char c = state.board[y+dy][x];
+            if (c == 'x') {
+                down++;
+                if (!targetMap[y+dy][x]) continue;
+                else { targetsDown++; break; }
+            } else if (c == 'X') {
+                down++; targetsDown++; break;
+            } else break;
+        }
+        
+        if (up + down >= 1 && targetsUp == 0 && targetsDown == 0) {
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+// Check if current state is a deadlock using precomputed simple deadlocks
 bool isDeadState(const State &state) {
     for (int y = 0; y < static_cast<int>(state.board.size()); ++y) {
         for (int x = 0; x < static_cast<int>(state.board[y].size()); ++x) {
             if (state.board[y][x] == 'x') {
+                // Check if box is in a simple deadlock square (precomputed)
                 if (y < static_cast<int>(deadCellMap.size()) && x < static_cast<int>(deadCellMap[y].size()) &&
                     deadCellMap[y][x]) {
                     return true;
                 }
+                // Check if box is on a fragile tile (@)
                 if (baseBoard[y][x] == '@') {
                     return true;
                 }
             }
+            // Check if box on target is on fragile tile
             if (state.board[y][x] == 'X') {
                 if (baseBoard[y][x] == '@') {
                     return true;
@@ -384,34 +551,155 @@ bool applyMoves(const State &start, const string &moves, State &out) {
         if (!tryMove(current, dir, next)) {
             return false;
         }
-        current = std::move(next);
+        current = next;
     }
-    out = std::move(current);
+    out = current;
     return true;
 }
+
+// A* heuristic: sum of Manhattan distances from each box to nearest target
+// Level 2 Push Distance Heuristic
+// Considers both box-to-goal distance and player-to-push-position cost
+int calculateHeuristic(const State &state) {
+    int h = 0;
+    
+    for (int y = 0; y < ROWS; ++y) {
+        for (int x = 0; x < COLS; ++x) {
+            if (state.board[y][x] == 'x') {
+                int minCost = INT_MAX;
+                
+                // For each target, calculate push distance
+                for (const auto &[ty, tx] : targetPositions) {
+                    // Box-to-target Manhattan distance
+                    int boxDist = abs(y - ty) + abs(x - tx);
+                    
+                    // Find the best push direction and estimate player cost
+                    int minPlayerCost = INT_MAX;
+                    
+                    // Try all 4 push directions
+                    for (int dir = 0; dir < 4; dir++) {
+                        // Position where player needs to be to push the box
+                        int push_from_y = y - dy[dir];
+                        int push_from_x = x - dx[dir];
+                        
+                        // Check if push position is valid
+                        if (!isWithin(push_from_y, push_from_x)) continue;
+                        if (baseBoard[push_from_y][push_from_x] == '#' || 
+                            baseBoard[push_from_y][push_from_x] == '@') continue;
+                        
+                        // Estimate player cost to reach push position
+                        int playerCost = abs(state.player_y - push_from_y) + 
+                                        abs(state.player_x - push_from_x);
+                        
+                        // If player is at the box position, add penalty for moving away
+                        if (state.player_y == y && state.player_x == x) {
+                            playerCost += 1;
+                        }
+                        
+                        minPlayerCost = min(minPlayerCost, playerCost);
+                    }
+                    
+                    // Total push distance = box distance + weighted player cost
+                    // Divide player cost by 2 for better balance (still admissible)
+                    int totalCost = boxDist;
+                    if (minPlayerCost != INT_MAX) {
+                        totalCost += minPlayerCost / 2;
+                    }
+                    
+                    minCost = min(minCost, totalCost);
+                }
+                
+                h += minCost;
+            }
+        }
+    }
+    
+    return h;
+}
+
+// Priority queue item for A*
+struct PQItem {
+    int stateIdx;
+    int priority; // f = g + h
+    
+    bool operator>(const PQItem &other) const {
+        return priority > other.priority;
+    }
+};
+
+string buildSolutionPath(int idx, const vector<int> &parents, const vector<char> &pushDirs, const vector<int> &prePushIndices,
+                         const vector<State> &states) {
+    vector<string> segments;
+    while (idx != -1 && parents[idx] != -1) {
+        int parentIdx = parents[idx];
+        string segment;
+        int target = prePushIndices[idx];
+        if (target != -1) {
+            ReachableInfo reach = computeReachable(states[parentIdx]);
+            segment = reconstructPath(target, reach);
+        }
+        if (pushDirs[idx] != '?') {
+            segment.push_back(pushDirs[idx]);
+        }
+        segments.push_back(std::move(segment));
+        idx = parentIdx;
+    }
+    string result;
+    for (auto it = segments.rbegin(); it != segments.rend(); ++it) {
+        result += *it;
+    }
+    return result;
+}
+
+// Candidate move structure for parallel processing
+struct CandidateMove {
+    State afterWalk;
+    int idx;
+    int dir;
+    int by, bx, ty, tx;
+};
 
 string solveWithBFS(const State &initialState, bool enableDeadCheck) {
     if (enableDeadCheck && isDeadState(initialState)) {
         return "";
     }
 
-    queue<State> todo;
-    unordered_map<State, string, StateHash> visited;
+    priority_queue<PQItem, vector<PQItem>, greater<PQItem>> pq;
+    vector<State> states;
+    vector<int> parents;
+    vector<char> pushDirs;
+    vector<int> prePushIndices;
+    vector<int> gScore;
+    states.reserve(8192);
+    parents.reserve(8192);
+    pushDirs.reserve(8192);
+    prePushIndices.reserve(8192);
+    gScore.reserve(8192);
+
+    unordered_map<State, int, StateHash> visited;
     visited.reserve(8192);
 
-    todo.push(initialState);
-    visited.emplace(initialState, "");
+    states.push_back(initialState);
+    parents.push_back(-1);
+    pushDirs.emplace_back('?');
+    prePushIndices.emplace_back(-1);
+    gScore.push_back(0);
+    
+    int h0 = calculateHeuristic(initialState);
+    pq.push({0, h0});
+    visited.emplace(initialState, 0);
 
-    while (!todo.empty()) {
-        State current = std::move(todo.front());
-        todo.pop();
-        const string &currPath = visited.find(current)->second;
-
-        ReachableInfo reach = computeReachable(current);
+    while (!pq.empty()) {
+        PQItem item = pq.top();
+        pq.pop();
+        int currentIdx = item.stateIdx;
+        ReachableInfo reach = computeReachable(states[currentIdx]);
         if (reach.startIndex == -1) {
             continue;
         }
 
+        // Step 1: Collect all candidate moves
+        vector<CandidateMove> candidates;
         for (int y = 0; y < ROWS; ++y) {
             for (int x = 0; x < COLS; ++x) {
                 int idx = y * COLS + x;
@@ -426,11 +714,11 @@ string solveWithBFS(const State &initialState, bool enableDeadCheck) {
 
                 State afterWalk;
                 if (!movePath.empty()) {
-                    if (!applyMoves(current, movePath, afterWalk)) {
+                    if (!applyMoves(states[currentIdx], movePath, afterWalk)) {
                         continue;
                     }
                 } else {
-                    afterWalk = current;
+                    afterWalk = states[currentIdx];
                 }
 
                 for (int dir = 0; dir < 4; ++dir) {
@@ -449,29 +737,145 @@ string solveWithBFS(const State &initialState, bool enableDeadCheck) {
                     if (targetTile != ' ' && targetTile != '.') {
                         continue;
                     }
+                    
+                    candidates.push_back({afterWalk, idx, dir, by, bx, ty, tx});
+                }
+            }
+        }
 
+        // Step 2: Process candidates in parallel with optimized load balancing
+        vector<State> validStates;
+        vector<int> validIndices;
+        vector<char> validDirs;
+        vector<int> validHeuristics;
+        
+        // Use parallel processing if we have enough candidates
+        if (candidates.size() >= 8) {
+            // Pre-allocate thread-local storage to reduce contention
+            const int num_threads = omp_get_max_threads();
+            vector<vector<State>> threadStates(num_threads);
+            vector<vector<int>> threadIndices(num_threads);
+            vector<vector<char>> threadDirs(num_threads);
+            vector<vector<int>> threadHeuristics(num_threads);
+            
+            // Pre-reserve space for each thread
+            size_t reserveSize = (candidates.size() / num_threads) + 1;
+            for (int t = 0; t < num_threads; t++) {
+                threadStates[t].reserve(reserveSize);
+                threadIndices[t].reserve(reserveSize);
+                threadDirs[t].reserve(reserveSize);
+                threadHeuristics[t].reserve(reserveSize);
+            }
+            
+            #pragma omp parallel
+            {
+                int tid = omp_get_thread_num();
+                int nthreads = omp_get_num_threads();
+                
+                #if DEBUG_THREAD_LOAD
+                int workCount = 0;
+                #endif
+                
+                // Manual work distribution: interleaved to ensure load balance
+                // Each thread processes every Nth candidate (stride = nthreads)
+                for (size_t i = tid; i < candidates.size(); i += nthreads) {
+                    #if DEBUG_THREAD_LOAD
+                    workCount++;
+                    #endif
+                    const auto& cand = candidates[i];
+                    
                     State pushed;
-                    if (!tryMove(afterWalk, dir, pushed)) {
+                    if (!tryMove(cand.afterWalk, cand.dir, pushed)) {
                         continue;
                     }
                     if (enableDeadCheck && isDeadState(pushed)) {
                         continue;
                     }
-
-                    string newPath = currPath;
-                    newPath += movePath;
-                    newPath.push_back(directions[dir]);
-
-                    if (isSolved(pushed)) {
-                        return newPath;
+                    
+                    // No locking here! Will check visited later during merge
+                    int h = calculateHeuristic(pushed);
+                    
+                    // Store in thread-local storage (no locking needed)
+                    threadStates[tid].push_back(pushed);
+                    threadIndices[tid].push_back(cand.idx);
+                    threadDirs[tid].push_back(directions[cand.dir]);
+                    threadHeuristics[tid].push_back(h);
+                }
+                
+                #if DEBUG_THREAD_LOAD
+                #pragma omp critical(debug_output)
+                {
+                    cerr << "Thread " << tid << " processed " << workCount 
+                         << " candidates, found " << threadStates[tid].size() 
+                         << " valid states" << endl;
+                }
+                #endif
+            }
+            
+            // Merge all thread results sequentially (once per iteration)
+            // Filter out visited states during merge (no locking needed)
+            for (int t = 0; t < num_threads; t++) {
+                for (size_t i = 0; i < threadStates[t].size(); ++i) {
+                    // Skip already visited states
+                    if (visited.find(threadStates[t][i]) != visited.end()) {
+                        continue;
                     }
-
-                    auto [it, inserted] = visited.emplace(pushed, newPath);
-                    if (inserted) {
-                        todo.push(std::move(pushed));
-                    }
+                    validStates.push_back(threadStates[t][i]);
+                    validIndices.push_back(threadIndices[t][i]);
+                    validDirs.push_back(threadDirs[t][i]);
+                    validHeuristics.push_back(threadHeuristics[t][i]);
                 }
             }
+        } else {
+            // Sequential processing for small candidate sets
+            for (size_t i = 0; i < candidates.size(); ++i) {
+                const auto& cand = candidates[i];
+                
+                State pushed;
+                if (!tryMove(cand.afterWalk, cand.dir, pushed)) {
+                    continue;
+                }
+                if (enableDeadCheck && isDeadState(pushed)) {
+                    continue;
+                }
+                
+                if (visited.find(pushed) != visited.end()) {
+                    continue;
+                }
+                
+                int h = calculateHeuristic(pushed);
+                
+                validStates.push_back(pushed);
+                validIndices.push_back(cand.idx);
+                validDirs.push_back(directions[cand.dir]);
+                validHeuristics.push_back(h);
+            }
+        }
+
+        // Step 3: Add valid states to global structures (sequential)
+        for (size_t i = 0; i < validStates.size(); ++i) {
+            // Double-check not visited (might have been added by another thread)
+            if (visited.find(validStates[i]) != visited.end()) {
+                continue;
+            }
+            
+            states.push_back(validStates[i]);
+            parents.push_back(currentIdx);
+            pushDirs.push_back(validDirs[i]);
+            prePushIndices.push_back(validIndices[i]);
+
+            int newIndex = static_cast<int>(states.size()) - 1;
+            int newG = gScore[currentIdx] + 1;
+            gScore.push_back(newG);
+            
+            visited.emplace(states.back(), newIndex);
+
+            if (isSolved(states.back())) {
+                return buildSolutionPath(newIndex, parents, pushDirs, prePushIndices, states);
+            }
+
+            int newF = newG + validHeuristics[i];
+            pq.push({newIndex, newF});
         }
     }
     return "";
