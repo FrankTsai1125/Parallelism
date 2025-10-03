@@ -30,16 +30,6 @@ struct State {
     }
 };
 
-struct StateHash {
-    size_t operator()(const State &state) const {
-        size_t seed = 0;
-        boost::hash_combine(seed, state.player_y);
-        boost::hash_combine(seed, state.player_x);
-        boost::hash_combine(seed, state.board);
-        return seed;
-    }
-};
-
 // Compact State: Memory-efficient representation
 // Stores only box positions and player position as encoded integers
 struct CompactState {
@@ -68,6 +58,7 @@ namespace {
 vector<string> baseBoard;
 vector<vector<bool>> targetMap;
 vector<vector<bool>> deadCellMap;
+vector<vector<bool>> goalReachable;
 vector<pair<int, int>> targetPositions;
 int ROWS = 0;
 int COLS = 0;
@@ -98,6 +89,7 @@ inline bool isWallForBox(int y, int x) {
 // Combines corner/corridor detection with limited reverse reachability
 void computeSimpleDeadlocks() {
     deadCellMap.assign(ROWS, vector<bool>(COLS, false));
+    goalReachable.assign(ROWS, vector<bool>(COLS, false));
     if (ROWS == 0 || COLS == 0) {
         return;
     }
@@ -117,6 +109,51 @@ void computeSimpleDeadlocks() {
                 deadCellMap[y][x] = true;
             }
         }
+
+    // Step 4: Reverse box reachability from targets
+    queue<pair<int, int>> q;
+    for (int y = 0; y < ROWS; ++y) {
+        for (int x = 0; x < COLS; ++x) {
+            if (targetMap[y][x]) {
+                goalReachable[y][x] = true;
+                q.emplace(y, x);
+            }
+        }
+    }
+
+    const int revDy[4] = {-1, 0, 1, 0};
+    const int revDx[4] = {0, -1, 0, 1};
+
+    while (!q.empty()) {
+        auto [y, x] = q.front();
+        q.pop();
+
+        for (int dir = 0; dir < 4; ++dir) {
+            int prevY = y - revDy[dir];
+            int prevX = x - revDx[dir];
+            int playerY = y - 2 * revDy[dir];
+            int playerX = x - 2 * revDx[dir];
+
+            if (!isWithin(prevY, prevX) || !isWithin(playerY, playerX)) {
+                continue;
+            }
+
+            // Box cannot stay on wall or fragile tile
+            if (baseBoard[prevY][prevX] == '#' || baseBoard[prevY][prevX] == '@') {
+                continue;
+            }
+
+            // Player must have a valid standing position when pushing
+            if (baseBoard[playerY][playerX] == '#') {
+                continue;
+            }
+
+            if (!goalReachable[prevY][prevX]) {
+                goalReachable[prevY][prevX] = true;
+                q.emplace(prevY, prevX);
+            }
+        }
+    }
     }
 
     // Step 2: Mark corridor deadlocks (horizontal)
@@ -342,9 +379,48 @@ inline bool isWall(int y, int x) {
 
 // Helper: Check if there's a box at position
 inline bool isBox(const State &state, int y, int x) {
-    if (!isWithin(y, x)) return false;
+    if (!isWithin(y, x)) {
+        return false;
+    }
     char c = state.board[y][x];
     return c == 'x' || c == 'X';
+}
+
+bool isStaticSquareDeadlock(const State &state, int top, int left) {
+    if (top < 0 || left < 0 || top + 1 >= ROWS || left + 1 >= COLS) {
+        return false;
+    }
+
+    bool hasNonTargetBox = false;
+    int solidCount = 0;
+
+    for (int dy = 0; dy < 2; ++dy) {
+        for (int dx = 0; dx < 2; ++dx) {
+            int y = top + dy;
+            int x = left + dx;
+
+            bool isWallTile = baseBoard[y][x] == '#' || baseBoard[y][x] == '@';
+            bool isTargetTile = targetMap[y][x];
+            char c = state.board[y][x];
+            bool isBoxTile = (c == 'x' || c == 'X');
+
+            if (isBoxTile && !isTargetTile) {
+                hasNonTargetBox = true;
+                solidCount++;
+            } else if (isWallTile) {
+                solidCount++;
+            } else if (isBoxTile && isTargetTile) {
+                // Box already on target contributes to blocking but shouldn't trigger unless all four are solid
+                solidCount++;
+            }
+        }
+    }
+
+    if (!hasNonTargetBox) {
+        return false;
+    }
+
+    return solidCount == 4;
 }
 
 // Enhanced Freeze Deadlock Detection with recursive box checking
@@ -471,6 +547,17 @@ bool isDeadState(const State &state) {
                 // Advanced deadlock: frozen box (only for boxes not on targets)
                 if (c == 'x' && isFrozenBox(state, y, x)) {
                     return true;
+                }
+
+                if (c == 'x') {
+                    static const int offsets[4][2] = {{0, 0}, {-1, 0}, {0, -1}, {-1, -1}};
+                    for (const auto &off : offsets) {
+                        int top = y + off[0];
+                        int left = x + off[1];
+                        if (isStaticSquareDeadlock(state, top, left)) {
+                            return true;
+                        }
+                    }
                 }
             }
         }
@@ -705,7 +792,7 @@ int calculateHeuristicCompact(const CompactState &compact) {
     
     int matchCost = 0;
     
-    // Use Hungarian algorithm only for complex cases (many boxes)
+    // Use Hungarian algorithm for complex cases (5-15 boxes)
     if (n >= 5 && n <= 15) {
         // Build cost matrix (box → target Manhattan distance)
         vector<vector<int>> cost(n, vector<int>(m, 0));
@@ -730,24 +817,7 @@ int calculateHeuristicCompact(const CompactState &compact) {
         }
     }
     
-    // Add player-to-nearest-box distance (divided by 2 to remain admissible)
-    auto [py, px] = decodePos(compact.player_pos);
-    int minPlayerDist = INT_MAX;
-    for (uint16_t boxPos : compact.boxes) {
-        auto [by, bx] = decodePos(boxPos);
-        int dist = abs(py - by) + abs(px - bx);
-        minPlayerDist = min(minPlayerDist, dist);
-    }
-    
-    if (minPlayerDist == INT_MAX) minPlayerDist = 0;
-    
-    return matchCost + (minPlayerDist / 2);
-}
-
-// A* heuristic with adaptive matching: Hungarian for complex cases, greedy for simple ones
-// Balances accuracy and performance (Legacy wrapper for State)
-int calculateHeuristic(const State &state) {
-    return calculateHeuristicCompact(compressState(state));
+    return matchCost;
 }
 
 // Priority queue item for A*
@@ -759,30 +829,6 @@ struct PQItem {
         return priority > other.priority;
     }
 };
-
-string buildSolutionPath(int idx, const vector<int> &parents, const vector<char> &pushDirs, const vector<int> &prePushIndices,
-                         const vector<State> &states) {
-    vector<string> segments;
-    while (idx != -1 && parents[idx] != -1) {
-        int parentIdx = parents[idx];
-        string segment;
-        int target = prePushIndices[idx];
-        if (target != -1) {
-            ReachableInfo reach = computeReachable(states[parentIdx]);
-            segment = reconstructPath(target, reach);
-        }
-        if (pushDirs[idx] != '?') {
-            segment.push_back(pushDirs[idx]);
-        }
-        segments.push_back(std::move(segment));
-        idx = parentIdx;
-    }
-    string result;
-    for (auto it = segments.rbegin(); it != segments.rend(); ++it) {
-        result += *it;
-    }
-    return result;
-}
 
 // Build solution path from CompactState vector
 string buildSolutionPathCompact(int idx, const vector<int> &parents, const vector<char> &pushDirs, const vector<int> &prePushIndices,
@@ -957,18 +1003,28 @@ string solveWithConcurrentBFS(const State &initialState, bool enableDeadCheck) {
                             continue;
                         }
                         
+                        if (enableDeadCheck && !goalReachable[ty][tx]) {
+                            continue;
+                        }
+
+                        // EARLY prune: check if target position is a corner deadlock
+                        // Only prune corner deadlocks (safest strategy)
+                        if (enableDeadCheck && !targetMap[ty][tx]) {
+                            bool up = isWall(ty - 1, tx);
+                            bool down = isWall(ty + 1, tx);
+                            bool left = isWall(ty, tx - 1);
+                            bool right = isWall(ty, tx + 1);
+                            if ((up && left) || (up && right) || (down && left) || (down && right)) {
+                                continue;  // Corner deadlock
+                            }
+                        }
+                        
                         State pushed;
                         if (!tryMove(afterWalk, dir, pushed)) {
                             continue;
                         }
-                        // Immediate prune (only when deadlock checks are enabled):
-                        // if the pushed box lands on a precomputed simple deadlock cell (and not a target), skip
-                        if (enableDeadCheck) {
-                            if (!targetMap[ty][tx] && deadCellMap[ty][tx]) {
-                                continue;
-                            }
-                        }
-                        if (enableDeadCheck && isDeadState(pushed)) {
+                        
+                    if (enableDeadCheck && isDeadState(pushed)) {
                             continue;
                         }
                         
