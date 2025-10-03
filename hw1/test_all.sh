@@ -14,11 +14,11 @@ echo "清理完成"
 echo ""
 
 # 載入所需模組並編譯執行檔
-module load gcc/11.4.0
+module load intel/2024
 module load python/3.12.2
 
 echo -n "編譯 hw1.cpp... "
-if g++ -std=c++17 -O3 -pthread -fopenmp hw1.cpp -o hw1 2> compile.log; then
+if make clean > /dev/null 2>&1 && make > compile.log 2>&1; then
     echo "完成"
 else
     echo "失敗"
