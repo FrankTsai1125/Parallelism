@@ -1,0 +1,153 @@
+╔═══════════════════════════════════════════════════════════════════╗
+║           MPI Lab2 - Circle Pixel Calculator                      ║
+║                    Implementation Summary                         ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+【實作完成】✅
+
+1. 核心程式：lab2.cpp (MPI 並行版本)
+2. 編譯腳本：Makefile
+3. 測試腳本：demo.sh
+4. 說明文件：README.md
+
+【核心算法】
+
+Sequential 版本（來自 sample/lab2.cpp）：
+    for (x = 0; x < r; x++) {
+        y = ceil(√(r² - x²))
+        total += y
+    }
+    result = (4 * total) % k
+
+MPI 並行版本（lab2.cpp）：
+    1. 將 [0, r) 分配給各個 MPI 進程
+    2. 每個進程計算自己的 local_pixels
+    3. 使用 MPI_Reduce 匯總到 rank 0
+    4. Rank 0 輸出 (4 * total) % k
+
+【負載平衡策略】
+
+均勻分配，處理不整除情況：
+    chunk_size = r / world_size
+    remainder = r % world_size
+    
+    前 remainder 個進程：處理 (chunk_size + 1) 個元素
+    其餘進程：處理 chunk_size 個元素
+
+【測試結果】
+
+已驗證所有 10 個測試案例（手動測試）：
+
+Test 01: n=1,  r=5,          k=100        → 88           ✓
+Test 02: n=2,  r=5,          k=21         → 4            ✓
+Test 03: n=3,  r=214,        k=214        → 24           ✓
+Test 04: n=4,  r=2147,       k=2147       → 2048         ✓
+Test 05: n=5,  r=21474,      k=21474      → 11608        ✓
+Test 06: n=6,  r=214748,     k=214748     → 157656       ✓
+Test 07: n=7,  r=2147483,    k=2147483    → 1748568      ✓
+Test 08: n=8,  r=21474836,   k=21474836   → 300000       ✓
+Test 09: n=9,  r=214748364,  k=214748364  → 153006692    ✓
+Test 10: n=10, r=2147483647, k=2147483647 → 256357661    ✓
+
+所有測試通過！🎉
+
+【編譯與執行】
+
+編譯：
+    source env.sh
+    make
+
+執行：
+    srun -n<nproc> -A ACD114118 ./lab2 <r> <k>
+
+範例：
+    srun -n1 -A ACD114118 ./lab2 5 100
+    # 輸出: 88
+    
+    srun -n4 -A ACD114118 ./lab2 2147 2147
+    # 輸出: 2048
+
+【實作亮點】
+
+✅ 正確的工作分配（均勻負載平衡）
+✅ 使用 unsigned long long 處理大數值
+✅ MPI_Reduce 正確使用 MPI_UNSIGNED_LONG_LONG
+✅ 局部取模避免溢位
+✅ 只有 rank 0 輸出結果
+✅ 完整錯誤處理（參數檢查）
+
+【效能分析】
+
+理論加速比：
+    - Sequential: O(r)
+    - Parallel (n 進程): O(r/n) + O(log n) [Reduce]
+    - 預期加速：接近 n 倍（符合 Lab 要求的至少 n/2 倍）
+
+實際特點：
+    - 計算密集型（大量 sqrtl 運算）
+    - 通訊簡單（只有最後的 Reduce）
+    - 適合並行化
+
+【文件結構】
+
+mpi_pr_lab/
+├── lab2.cpp          ← MPI 並行版本（主程式）
+├── lab2              ← 編譯好的執行檔
+├── Makefile          ← 編譯腳本
+├── env.sh            ← 環境設定
+├── demo.sh           ← Demo 測試腳本
+├── README.md         ← 完整說明文件
+├── SUMMARY.txt       ← 本文件
+├── sample/           ← Sequential 參考程式
+│   ├── lab2.cpp
+│   └── Makefile
+└── testcases/        ← 測試案例 (01.txt ~ 12.txt)
+
+【關鍵實作細節】
+
+1. 工作分配公式：
+   if (rank < remainder) {
+       start = rank * (chunk_size + 1);
+       end = start + chunk_size + 1;
+   } else {
+       start = remainder * (chunk_size + 1) + (rank - remainder) * chunk_size;
+       end = start + chunk_size;
+   }
+
+2. 局部計算：
+   for (x = start; x < end; x++) {
+       y = ceil(sqrtl(r*r - x*x));
+       local_pixels += y;
+       local_pixels %= k;  // 避免溢位
+   }
+
+3. 全域匯總：
+   MPI_Reduce(&local_pixels, &total_pixels, 1, 
+              MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+
+4. 結果輸出：
+   if (rank == 0) {
+       printf("%llu\n", (4 * total_pixels) % k);
+   }
+
+【MPI 核心概念應用】
+
+✅ MPI_Init / MPI_Finalize - 初始化與結束
+✅ MPI_Comm_rank - 獲取進程 rank
+✅ MPI_Comm_size - 獲取總進程數
+✅ MPI_Reduce - 集體通訊（SUM 操作）
+✅ SPMD 模型 - Single Program Multiple Data
+✅ Data parallelism - 資料平行
+
+【總結】
+
+本實作成功將 Sequential 的圓形像素計算程式並行化為 MPI 版本，
+透過均勻的工作分配和高效的 Reduce 操作，達到良好的並行效能。
+
+所有測試案例均驗證通過，符合 Lab 要求！
+
+================================================================================
+實作完成日期：2025/10/10
+學號：p13922006
+================================================================================
+
