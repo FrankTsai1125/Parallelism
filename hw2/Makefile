@@ -1,7 +1,7 @@
 # Makefile for hw2_sift project
 # Compiler and flags
 MPICXX = mpicxx
-MPIFLAGS = -std=c++17 -O3 -fopenmp -march=native -ffast-math -funroll-loops
+MPIFLAGS = -std=c++17 -Ofast -fopenmp -march=native -mtune=native -ffast-math -funroll-loops -ftree-vectorize -fno-math-errno
 INCLUDES = -I.
 
 # Source files

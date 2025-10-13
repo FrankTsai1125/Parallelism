@@ -594,14 +594,44 @@ void compute_octave_partition(int total_octaves, int world_size,
     octave_starts.resize(world_size);
     octave_counts.resize(world_size);
     
-    int base_count = total_octaves / world_size;
-    int remainder = total_octaves % world_size;
+    if (world_size == 1) {
+        // Single process: handle all octaves
+        octave_starts[0] = 0;
+        octave_counts[0] = total_octaves;
+        return;
+    }
     
-    int current_octave = 0;
-    for (int rank = 0; rank < world_size; ++rank) {
-        octave_starts[rank] = current_octave;
-        octave_counts[rank] = base_count + (rank < remainder ? 1 : 0);
-        current_octave += octave_counts[rank];
+    // Workload-aware strategy for multi-process:
+    // Octave 0 is huge (~75% of work), rank 0 handles it alone
+    // Remaining octaves 1..N-1 distributed among ranks 1..n-1
+    // This way rank 0 does ~75% and other ranks share ~25%
+    
+    if (world_size == 2) {
+        // Special case: 2 processes
+        // Rank 0: octave 0 (75%)
+        // Rank 1: octaves 1-7 (25%)
+        octave_starts[0] = 0;
+        octave_counts[0] = 1;
+        octave_starts[1] = 1;
+        octave_counts[1] = total_octaves - 1;
+    } else {
+        // General case: n >= 3 processes
+        // Rank 0: octave 0 alone
+        octave_starts[0] = 0;
+        octave_counts[0] = 1;
+        
+        // Remaining octaves distributed among ranks 1..n-1
+        int remaining_octaves = total_octaves - 1;
+        int remaining_ranks = world_size - 1;
+        int base_count = remaining_octaves / remaining_ranks;
+        int remainder = remaining_octaves % remaining_ranks;
+        
+        int current_octave = 1;
+        for (int rank = 1; rank < world_size; ++rank) {
+            octave_starts[rank] = current_octave;
+            octave_counts[rank] = base_count + (rank - 1 < remainder ? 1 : 0);
+            current_octave += octave_counts[rank];
+        }
     }
 }
 
