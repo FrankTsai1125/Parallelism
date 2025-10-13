@@ -5,6 +5,7 @@
 #include <vector>
 #include <array>
 #include <cstdint>
+#include <mpi.h>
 
 #include "image.hpp"
 
@@ -78,6 +79,25 @@ std::vector<Keypoint> find_keypoints_and_descriptors(const Image& img, float sig
                                                      float edge_thresh=C_EDGE,
                                                      float lambda_ori=LAMBDA_ORI,
                                                      float lambda_desc=LAMBDA_DESC);
+
+// MPI helper functions for distributed SIFT processing
+void mpi_broadcast_image(Image& img, int root, MPI_Comm comm);
+
+void compute_octave_partition(int total_octaves, int world_size, 
+                              std::vector<int>& octave_starts,
+                              std::vector<int>& octave_counts);
+
+std::vector<Keypoint> mpi_gather_keypoints(const std::vector<Keypoint>& local_kps, 
+                                           int root, MPI_Comm comm);
+
+// Process a specific range of octaves (for MPI distribution)
+std::vector<Keypoint> find_keypoints_range(const ScaleSpacePyramid& dog_pyramid,
+                                          const ScaleSpacePyramid& grad_pyramid,
+                                          int start_octave, int num_octaves,
+                                          float contrast_thresh=C_DOG,
+                                          float edge_thresh=C_EDGE,
+                                          float lambda_ori=LAMBDA_ORI,
+                                          float lambda_desc=LAMBDA_DESC);
                                                      
 Image draw_keypoints(const Image& img, const std::vector<Keypoint>& kps);
 

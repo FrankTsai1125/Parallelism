@@ -2,6 +2,7 @@
 #include <iostream>
 #include <cassert>
 #include <utility>
+#include <omp.h>
 
 #include "image.hpp"
 #define STB_IMAGE_IMPLEMENTATION
@@ -178,17 +179,40 @@ float map_coordinate(float new_max, float current_max, float coord)
 Image Image::resize(int new_w, int new_h, Interpolation method) const
 {
     Image resized(new_w, new_h, this->channels);
-    float value = 0;
-    for (int x = 0; x < new_w; x++) {
+    
+    if (method == Interpolation::NEAREST) {
+        // Optimized nearest neighbor
+        #pragma omp parallel for collapse(2) schedule(static)
         for (int y = 0; y < new_h; y++) {
-            for (int c = 0; c < resized.channels; c++) {
+            for (int x = 0; x < new_w; x++) {
                 float old_x = map_coordinate(this->width, new_w, x);
                 float old_y = map_coordinate(this->height, new_h, y);
-                if (method == Interpolation::BILINEAR)
-                    value = bilinear_interpolate(*this, old_x, old_y, c);
-                else if (method == Interpolation::NEAREST)
-                    value = nn_interpolate(*this, old_x, old_y, c);
-                resized.set_pixel(x, y, c, value);
+                int src_x = std::round(old_x);
+                int src_y = std::round(old_y);
+                // Clamp
+                if (src_x < 0) src_x = 0;
+                if (src_x >= this->width) src_x = this->width - 1;
+                if (src_y < 0) src_y = 0;
+                if (src_y >= this->height) src_y = this->height - 1;
+                
+                for (int c = 0; c < this->channels; c++) {
+                    resized.data[c * new_h * new_w + y * new_w + x] = 
+                        this->data[c * this->height * this->width + src_y * this->width + src_x];
+                }
+            }
+        }
+    } else {
+        // Bilinear interpolation
+        #pragma omp parallel for collapse(2) schedule(static)
+        for (int y = 0; y < new_h; y++) {
+            for (int x = 0; x < new_w; x++) {
+                float old_x = map_coordinate(this->width, new_w, x);
+                float old_y = map_coordinate(this->height, new_h, y);
+                
+                for (int c = 0; c < this->channels; c++) {
+                    float value = bilinear_interpolate(*this, old_x, old_y, c);
+                    resized.data[c * new_h * new_w + y * new_w + x] = value;
+                }
             }
         }
     }
@@ -218,14 +242,19 @@ Image rgb_to_grayscale(const Image& img)
 {
     assert(img.channels == 3);
     Image gray(img.width, img.height, 1);
-    for (int x = 0; x < img.width; x++) {
-        for (int y = 0; y < img.height; y++) {
-            float red, green, blue;
-            red = img.get_pixel(x, y, 0);
-            green = img.get_pixel(x, y, 1);
-            blue = img.get_pixel(x, y, 2);
-            gray.set_pixel(x, y, 0, 0.299*red + 0.587*green + 0.114*blue);
-        }
+    
+    int w = img.width;
+    int h = img.height;
+    const float* r_data = img.data;
+    const float* g_data = img.data + w * h;
+    const float* b_data = img.data + 2 * w * h;
+    float* gray_data = gray.data;
+    
+    #pragma omp parallel for schedule(static)
+    for (int idx = 0; idx < w * h; idx++) {
+        gray_data[idx] = 0.299f * r_data[idx] + 
+                        0.587f * g_data[idx] + 
+                        0.114f * b_data[idx];
     }
     return gray;
 }
@@ -267,26 +296,99 @@ Image gaussian_blur(const Image& img, float sigma)
     Image tmp(img.width, img.height, 1);
     Image filtered(img.width, img.height, 1);
 
-    // convolve vertical
-    for (int x = 0; x < img.width; x++) {
-        for (int y = 0; y < img.height; y++) {
-            float sum = 0;
-            for (int k = 0; k < size; k++) {
-                int dy = -center + k;
-                sum += img.get_pixel(x, y+dy, 0) * kernel.data[k];
+    int w = img.width;
+    int h = img.height;
+    const float* img_data = img.data;
+    float* tmp_data = tmp.data;
+    float* filt_data = filtered.data;
+    const float* kern_data = kernel.data;
+
+    // convolve vertical - optimized for cache and vectorization
+    // Handle border separately for better performance
+    #pragma omp parallel
+    {
+        // Interior (no boundary checks needed)
+        #pragma omp for schedule(static) nowait
+        for (int y = center; y < h - center; y++) {
+            int y_base = y * w;
+            for (int x = 0; x < w; x++) {
+                float sum = 0.0f;
+                #pragma omp simd reduction(+:sum)
+                for (int k = 0; k < size; k++) {
+                    sum += img_data[(y - center + k) * w + x] * kern_data[k];
+                }
+                tmp_data[y_base + x] = sum;
             }
-            tmp.set_pixel(x, y, 0, sum);
+        }
+        
+        // Top border
+        #pragma omp for schedule(static) nowait
+        for (int y = 0; y < center; y++) {
+            int y_base = y * w;
+            for (int x = 0; x < w; x++) {
+                float sum = 0.0f;
+                for (int k = 0; k < size; k++) {
+                    int sy = y - center + k;
+                    sy = (sy < 0) ? 0 : sy;
+                    sum += img_data[sy * w + x] * kern_data[k];
+                }
+                tmp_data[y_base + x] = sum;
+            }
+        }
+        
+        // Bottom border
+        #pragma omp for schedule(static) nowait
+        for (int y = h - center; y < h; y++) {
+            int y_base = y * w;
+            for (int x = 0; x < w; x++) {
+                float sum = 0.0f;
+                for (int k = 0; k < size; k++) {
+                    int sy = y - center + k;
+                    sy = (sy >= h) ? h - 1 : sy;
+                    sum += img_data[sy * w + x] * kern_data[k];
+                }
+                tmp_data[y_base + x] = sum;
+            }
         }
     }
-    // convolve horizontal
-    for (int x = 0; x < img.width; x++) {
-        for (int y = 0; y < img.height; y++) {
-            float sum = 0;
+    
+    // convolve horizontal - optimized for cache and vectorization
+    #pragma omp parallel for schedule(static)
+    for (int y = 0; y < h; y++) {
+        int y_base = y * w;
+        const float* tmp_row = tmp_data + y_base;
+        float* filt_row = filt_data + y_base;
+        
+        // Interior (no boundary checks)
+        for (int x = center; x < w - center; x++) {
+            float sum = 0.0f;
+            #pragma omp simd reduction(+:sum)
             for (int k = 0; k < size; k++) {
-                int dx = -center + k;
-                sum += tmp.get_pixel(x+dx, y, 0) * kernel.data[k];
+                sum += tmp_row[x - center + k] * kern_data[k];
             }
-            filtered.set_pixel(x, y, 0, sum);
+            filt_row[x] = sum;
+        }
+        
+        // Left border
+        for (int x = 0; x < center; x++) {
+            float sum = 0.0f;
+            for (int k = 0; k < size; k++) {
+                int sx = x - center + k;
+                sx = (sx < 0) ? 0 : sx;
+                sum += tmp_row[sx] * kern_data[k];
+            }
+            filt_row[x] = sum;
+        }
+        
+        // Right border
+        for (int x = w - center; x < w; x++) {
+            float sum = 0.0f;
+            for (int k = 0; k < size; k++) {
+                int sx = x - center + k;
+                sx = (sx >= w) ? w - 1 : sx;
+                sum += tmp_row[sx] * kern_data[k];
+            }
+            filt_row[x] = sum;
         }
     }
     return filtered;

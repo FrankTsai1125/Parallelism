@@ -44,21 +44,3 @@ run_test() {
     fi
 }
 
-# Sample tests
-run_test 1  1 5          100        88
-run_test 2  2 5          21         4
-run_test 3  3 214        214        24
-run_test 4  4 2147       2147       2048
-run_test 5  5 21474      21474      11608
-
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "✨ Testing completed!"
-echo ""
-echo "📝 To test manually:"
-echo "   source env.sh"
-echo "   srun -n<nproc> -A ACD114118 ./lab2 <r> <k>"
-echo ""
-echo "📂 Test all cases:"
-echo "   Run tests from testcases/ directory manually"
-

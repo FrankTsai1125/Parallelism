@@ -1,7 +1,7 @@
 # Makefile for hw2_sift project
 # Compiler and flags
 MPICXX = mpicxx
-MPIFLAGS = -std=c++17 -O3 -fopenmp
+MPIFLAGS = -std=c++17 -O3 -fopenmp -march=native -ffast-math -funroll-loops
 INCLUDES = -I.
 
 # Source files
@@ -31,6 +31,6 @@ image.o: image.cpp image.hpp $(STB_HEADERS)
 
 # Clean up build artifacts
 clean:
-	rm -f $(OBJECTS) $(MPI_OBJECTS) $(TARGET) result.jpg
+	rm -f $(OBJECTS) $(TARGET) result.jpg
 
 .PHONY: all clean
