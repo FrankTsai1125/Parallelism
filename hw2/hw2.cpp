@@ -59,10 +59,12 @@ int main(int argc, char *argv[])
     // Each rank processes its assigned octaves
     std::vector<Keypoint> local_kps;
     
-    // All ranks build pyramids (necessary for SIFT algorithm)
-    // But each only processes its assigned octaves
+    // On-demand pyramid construction: each rank only builds up to its maximum octave
+    // This avoids redundant construction while maintaining octave dependencies
+    int octaves_to_build = (world_size == 1) ? total_octaves : (my_start_octave + my_num_octaves);
+    
     ScaleSpacePyramid gaussian_pyramid = generate_gaussian_pyramid(
-        img, SIGMA_MIN, total_octaves, N_SPO);
+        img, SIGMA_MIN, octaves_to_build, N_SPO);
     ScaleSpacePyramid dog_pyramid = generate_dog_pyramid(gaussian_pyramid);
     ScaleSpacePyramid grad_pyramid = generate_gradient_pyramid(gaussian_pyramid);
     
