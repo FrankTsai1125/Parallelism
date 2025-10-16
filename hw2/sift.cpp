@@ -22,7 +22,12 @@ ScaleSpacePyramid generate_gaussian_pyramid(const Image& img, float sigma_min,
     float base_sigma = sigma_min / MIN_PIX_DIST;
     Image base_img = img.resize(img.width*2, img.height*2, Interpolation::BILINEAR);
     float sigma_diff = std::sqrt(base_sigma*base_sigma - 1.0f);
-    base_img = gaussian_blur(base_img, sigma_diff);
+    
+    // Pre-allocate tmp buffer for gaussian_blur reuse (memory optimization)
+    // Use the largest size (base_img size) to cover all octaves
+    Image tmp_buffer(base_img.width, base_img.height, 1);
+    
+    base_img = gaussian_blur(base_img, sigma_diff, &tmp_buffer);
 
     int imgs_per_octave = scales_per_octave + 3;
 
@@ -47,7 +52,8 @@ ScaleSpacePyramid generate_gaussian_pyramid(const Image& img, float sigma_min,
         pyramid.octaves[i].push_back(std::move(base_img));
         for (int j = 1; j < sigma_vals.size(); j++) {
             const Image& prev_img = pyramid.octaves[i].back();
-            pyramid.octaves[i].push_back(gaussian_blur(prev_img, sigma_vals[j]));
+            // Use memory-optimized version with tmp buffer reuse
+            pyramid.octaves[i].push_back(gaussian_blur(prev_img, sigma_vals[j], &tmp_buffer));
         }
         // prepare base image for next octave
         if (i < num_octaves - 1) {
@@ -238,54 +244,48 @@ std::vector<Keypoint> find_keypoints(const ScaleSpacePyramid& dog_pyramid, float
 {
     std::vector<Keypoint> keypoints;
     
-    // Phase 1: Parallel extrema detection
-    std::vector<std::tuple<int,int,int,int>> candidates;
-    
+    // Single-phase: Detect, refine, and collect in one pass
+    // Eliminates intermediate candidates vector and reduces memory allocation
     #pragma omp parallel
     {
-        std::vector<std::tuple<int,int,int,int>> local_candidates;
+        std::vector<Keypoint> local_keypoints;
+        local_keypoints.reserve(500); // Pre-allocate to reduce reallocation
         
-        #pragma omp for collapse(2) schedule(dynamic)
+        #pragma omp for collapse(2) schedule(dynamic, 1) nowait
         for (int i = 0; i < dog_pyramid.num_octaves; i++) {
             for (int j = 1; j < dog_pyramid.imgs_per_octave-1; j++) {
                 const Image& img = dog_pyramid.octaves[i][j];
-                for (int x = 1; x < img.width-1; x++) {
-                    for (int y = 1; y < img.height-1; y++) {
-                        if (std::abs(img.get_pixel(x, y, 0)) < 0.8*contrast_thresh) {
+                const int width = img.width;
+                const int height = img.height;
+                const float* img_data = img.data;
+                const float thresh = 0.8f * contrast_thresh;
+                
+                // Cache-friendly loop order: iterate y in outer loop for better spatial locality
+                for (int y = 1; y < height-1; y++) {
+                    for (int x = 1; x < width-1; x++) {
+                        const float val = img_data[y * width + x];
+                        
+                        // Early rejection: contrast threshold check
+                        if (std::abs(val) < thresh) {
                             continue;
                         }
+                        
+                        // Check if extremum
                         if (point_is_extremum(dog_pyramid.octaves[i], j, x, y)) {
-                            local_candidates.push_back({i, j, x, y});
+                            Keypoint kp = {x, y, i, j, -1, -1, -1, -1};
+                            
+                            // Refine immediately, no intermediate storage
+                            if (refine_or_discard_keypoint(kp, dog_pyramid.octaves[i],
+                                                          contrast_thresh, edge_thresh)) {
+                                local_keypoints.push_back(kp);
+                            }
                         }
                     }
                 }
             }
         }
         
-        #pragma omp critical
-        {
-            candidates.insert(candidates.end(), 
-                            local_candidates.begin(),
-                            local_candidates.end());
-        }
-    }
-    
-    // Phase 2: Parallel keypoint refinement
-    #pragma omp parallel
-    {
-        std::vector<Keypoint> local_keypoints;
-        
-        #pragma omp for schedule(dynamic)
-        for (size_t idx = 0; idx < candidates.size(); idx++) {
-            auto [i, j, x, y] = candidates[idx];
-            Keypoint kp = {x, y, i, j, -1, -1, -1, -1};
-            bool kp_is_valid = refine_or_discard_keypoint(kp, dog_pyramid.octaves[i],
-                                                         contrast_thresh, edge_thresh);
-            if (kp_is_valid) {
-                local_keypoints.push_back(kp);
-            }
-        }
-        
+        // Reduce critical section contention by collecting once per thread
         #pragma omp critical
         {
             keypoints.insert(keypoints.end(),
@@ -315,23 +315,28 @@ ScaleSpacePyramid generate_gradient_pyramid(const ScaleSpacePyramid& pyramid)
     #pragma omp parallel for collapse(2) schedule(static)
     for (int i = 0; i < pyramid.num_octaves; i++) {
         for (int j = 0; j < pyramid.imgs_per_octave; j++) {
-            int width = pyramid.octaves[i][j].width;
-            int height = pyramid.octaves[i][j].height;
+            const int width = pyramid.octaves[i][j].width;
+            const int height = pyramid.octaves[i][j].height;
             const float* src_data = pyramid.octaves[i][j].data;
             
             grad_pyramid.octaves[i][j] = Image(width, height, 2);
             float* grad_data = grad_pyramid.octaves[i][j].data;
+            float* gx_data = grad_data;
+            float* gy_data = grad_data + width * height;
             
-            // Compute gradients with direct memory access
-            for (int x = 1; x < width-1; x++) {
-                for (int y = 1; y < height-1; y++) {
-                    int idx = y * width + x;
-                    // gx channel (channel 0)
-                    grad_data[idx] = (src_data[y * width + (x+1)] - 
-                                     src_data[y * width + (x-1)]) * 0.5f;
-                    // gy channel (channel 1)
-                    grad_data[width * height + idx] = (src_data[(y+1) * width + x] - 
-                                                       src_data[(y-1) * width + x]) * 0.5f;
+            // Cache-friendly loop order: y in outer loop for row-wise access
+            for (int y = 1; y < height-1; y++) {
+                const int row_offset = y * width;
+                const int row_above = (y-1) * width;
+                const int row_below = (y+1) * width;
+                
+                // Process entire row at once for better cache locality
+                for (int x = 1; x < width-1; x++) {
+                    const int idx = row_offset + x;
+                    // gx channel: horizontal gradient
+                    gx_data[idx] = (src_data[row_offset + x+1] - src_data[row_offset + x-1]) * 0.5f;
+                    // gy channel: vertical gradient
+                    gy_data[idx] = (src_data[row_below + x] - src_data[row_above + x]) * 0.5f;
                 }
             }
         }
@@ -344,12 +349,23 @@ ScaleSpacePyramid generate_gradient_pyramid(const ScaleSpacePyramid& pyramid)
 void smooth_histogram(float hist[N_BINS])
 {
     float tmp_hist[N_BINS];
+    const float inv3 = 1.0f / 3.0f;
+    
+    // Ping-pong between hist and tmp_hist to reduce memory copying
     for (int i = 0; i < 6; i++) {
+        float* src = (i % 2 == 0) ? hist : tmp_hist;
+        float* dst = (i % 2 == 0) ? tmp_hist : hist;
+        
+        // Unrolled loop for better performance
         for (int j = 0; j < N_BINS; j++) {
-            int prev_idx = (j-1+N_BINS)%N_BINS;
-            int next_idx = (j+1)%N_BINS;
-            tmp_hist[j] = (hist[prev_idx] + hist[j] + hist[next_idx]) / 3;
+            int prev_idx = (j == 0) ? N_BINS-1 : j-1;
+            int next_idx = (j == N_BINS-1) ? 0 : j+1;
+            dst[j] = (src[prev_idx] + src[j] + src[next_idx]) * inv3;
         }
+    }
+    
+    // Ensure result is in hist
+    if (6 % 2 == 1) {
         for (int j = 0; j < N_BINS; j++) {
             hist[j] = tmp_hist[j];
         }
@@ -446,23 +462,32 @@ void update_histograms(float hist[N_HIST][N_HIST][N_ORI], float x, float y,
 
 void hists_to_vec(float histograms[N_HIST][N_HIST][N_ORI], std::array<uint8_t, 128>& feature_vec)
 {
-    int size = N_HIST*N_HIST*N_ORI;
+    constexpr int size = N_HIST*N_HIST*N_ORI;
     float *hist = reinterpret_cast<float *>(histograms);
 
+    // Compute L2 norm with SIMD hint
     float norm = 0;
+    #pragma omp simd reduction(+:norm)
     for (int i = 0; i < size; i++) {
         norm += hist[i] * hist[i];
     }
     norm = std::sqrt(norm);
+    
+    // Clamp and compute second norm
+    const float thresh = 0.2f * norm;
     float norm2 = 0;
+    #pragma omp simd reduction(+:norm2)
     for (int i = 0; i < size; i++) {
-        hist[i] = std::min(hist[i], 0.2f*norm);
+        hist[i] = std::min(hist[i], thresh);
         norm2 += hist[i] * hist[i];
     }
     norm2 = std::sqrt(norm2);
+    
+    // Quantize to uint8
+    const float scale = 512.0f / norm2;
     for (int i = 0; i < size; i++) {
-        float val = std::floor(512*hist[i]/norm2);
-        feature_vec[i] = std::min((int)val, 255);
+        int val = static_cast<int>(hist[i] * scale);
+        feature_vec[i] = static_cast<uint8_t>(std::min(val, 255));
     }
 }
 
@@ -526,13 +551,15 @@ std::vector<Keypoint> find_keypoints_and_descriptors(const Image& img, float sig
     ScaleSpacePyramid grad_pyramid = generate_gradient_pyramid(gaussian_pyramid);
     
     std::vector<Keypoint> kps;
+    kps.reserve(tmp_kps.size() * 2); // Pre-allocate: typically 1-2 orientations per keypoint
 
-    // Parallel descriptor computation
+    // Parallel descriptor computation with reduced critical section
     #pragma omp parallel
     {
         std::vector<Keypoint> local_kps;
+        local_kps.reserve(tmp_kps.size() / omp_get_num_threads() + 10);
         
-        #pragma omp for schedule(dynamic)
+        #pragma omp for schedule(dynamic, 16) nowait
         for (size_t i = 0; i < tmp_kps.size(); i++) {
             Keypoint& kp_tmp = tmp_kps[i];
             std::vector<float> orientations = find_keypoint_orientations(kp_tmp, grad_pyramid,
@@ -749,15 +776,24 @@ std::vector<Keypoint> find_keypoints_range(const ScaleSpacePyramid& dog_pyramid,
         std::vector<Keypoint> thread_local_kps;
         thread_local_kps.reserve(1000); // Pre-allocate
         
-        #pragma omp for collapse(2) schedule(dynamic, 1)
+        #pragma omp for collapse(2) schedule(dynamic, 1) nowait
         for (int oct = start_octave; oct < start_octave + num_octaves; oct++) {
             for (int scale = 1; scale < dog_pyramid.imgs_per_octave - 1; scale++) {
                 const Image& img = dog_pyramid.octaves[oct][scale];
-                for (int x = 1; x < img.width - 1; x++) {
-                    for (int y = 1; y < img.height - 1; y++) {
-                        if (std::abs(img.get_pixel(x, y, 0)) < 0.8 * contrast_thresh) {
+                const int width = img.width;
+                const int height = img.height;
+                const float* img_data = img.data;
+                const float thresh = 0.8f * contrast_thresh;
+                
+                // Cache-friendly loop order
+                for (int y = 1; y < height - 1; y++) {
+                    for (int x = 1; x < width - 1; x++) {
+                        const float val = img_data[y * width + x];
+                        
+                        if (std::abs(val) < thresh) {
                             continue;
                         }
+                        
                         if (point_is_extremum(dog_pyramid.octaves[oct], scale, x, y)) {
                             Keypoint kp = {x, y, oct, scale, -1, -1, -1, -1};
                             if (refine_or_discard_keypoint(kp, dog_pyramid.octaves[oct], 
@@ -776,12 +812,15 @@ std::vector<Keypoint> find_keypoints_range(const ScaleSpacePyramid& dog_pyramid,
         }
     }
     
-    // Phase 2: Compute descriptors
+    // Phase 2: Compute descriptors with pre-allocation
+    kps.reserve(tmp_kps.size() * 2);
+    
     #pragma omp parallel
     {
         std::vector<Keypoint> local_kps;
+        local_kps.reserve(tmp_kps.size() / omp_get_num_threads() + 10);
         
-        #pragma omp for schedule(dynamic)
+        #pragma omp for schedule(dynamic, 16) nowait
         for (size_t i = 0; i < tmp_kps.size(); i++) {
             Keypoint kp = tmp_kps[i];
             std::vector<float> orientations = find_keypoint_orientations(

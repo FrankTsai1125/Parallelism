@@ -277,6 +277,12 @@ Image grayscale_to_rgb(const Image& img)
 // separable 2D gaussian blur for 1 channel image
 Image gaussian_blur(const Image& img, float sigma)
 {
+    return gaussian_blur(img, sigma, nullptr);
+}
+
+// Memory-optimized version: reuses tmp buffer to avoid repeated allocations
+Image gaussian_blur(const Image& img, float sigma, Image* reuse_tmp)
+{
     assert(img.channels == 1);
 
     int size = std::ceil(6 * sigma);
@@ -293,7 +299,15 @@ Image gaussian_blur(const Image& img, float sigma)
     for (int k = 0; k < size; k++)
         kernel.data[k] /= sum;
 
-    Image tmp(img.width, img.height, 1);
+    // Reuse tmp buffer if provided and size matches
+    Image tmp;
+    if (reuse_tmp && reuse_tmp->width == img.width && 
+        reuse_tmp->height == img.height && reuse_tmp->channels == 1) {
+        tmp = std::move(*reuse_tmp);  // Take ownership
+    } else {
+        tmp = Image(img.width, img.height, 1);  // Allocate new
+    }
+    
     Image filtered(img.width, img.height, 1);
 
     int w = img.width;
@@ -391,6 +405,12 @@ Image gaussian_blur(const Image& img, float sigma)
             filt_row[x] = sum;
         }
     }
+    
+    // Return tmp buffer to caller for reuse
+    if (reuse_tmp) {
+        *reuse_tmp = std::move(tmp);
+    }
+    
     return filtered;
 }
 
