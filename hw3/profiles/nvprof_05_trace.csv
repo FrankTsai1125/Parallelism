@@ -1,14 +1,19 @@
-==683376== NVPROF is profiling process 683376, command: ./hw3 0.7725 -0.385 1.3065 0.782 -0.178 0.312 4096 4096 output_05.png
-==683376== Profiling application: ./hw3 0.7725 -0.385 1.3065 0.782 -0.178 0.312 4096 4096 output_05.png
-==683376== Warning: 1 records have invalid timestamps due to insufficient device buffer space. You can configure the buffer space using the option --device-buffer-size.
-==683376== Profiling result:
+==1324936== NVPROF is profiling process 1324936, command: ./hw3 0.7725 -0.385 1.3065 0.782 -0.178 0.312 4096 4096 output_05.png
+==1324936== Profiling application: ./hw3 0.7725 -0.385 1.3065 0.782 -0.178 0.312 4096 4096 output_05.png
+==1324936== Profiling result:
 "Start","Duration","Grid X","Grid Y","Grid Z","Block X","Block Y","Block Z","Registers Per Thread","Static SMem","Dynamic SMem","Size","Throughput","SrcMemType","DstMemType","Device","Context","Stream","Name","Correlation_ID"
-ms,us,,,,,,,,B,B,B,MB/s,,,,,,,
-331.478160,1.280000,,,,,,,,,,4,2.980232,"Pageable","Device","Tesla V100-SXM2-32GB (0)","1","7","[CUDA memcpy HtoD]",965
-331.486703,1.248000,,,,,,,,,,4,3.056648,"Pageable","Device","Tesla V100-SXM2-32GB (0)","1","7","[CUDA memcpy HtoD]",966
-331.495152,1.248000,,,,,,,,,,4,3.056648,"Pageable","Device","Tesla V100-SXM2-32GB (0)","1","7","[CUDA memcpy HtoD]",967
-331.503535,1.248000,,,,,,,,,,4,3.056648,"Pageable","Device","Tesla V100-SXM2-32GB (0)","1","7","[CUDA memcpy HtoD]",968
-331.511791,1.280000,,,,,,,,,,4,2.980232,"Pageable","Device","Tesla V100-SXM2-32GB (0)","1","7","[CUDA memcpy HtoD]",969
-331.520431,1.248000,,,,,,,,,,4,3.056648,"Pageable","Device","Tesla V100-SXM2-32GB (0)","1","7","[CUDA memcpy HtoD]",970
-331.528655,1.248000,,,,,,,,,,4,3.056648,"Pageable","Device","Tesla V100-SXM2-32GB (0)","1","7","[CUDA memcpy HtoD]",971
-331.537007,1.248000,,,,,,,,,,4,3.056648,"Pageable","Device","Tesla V100-SXM2-32GB (0)","1","7","[CUDA memcpy HtoD]",972
+s,s,,,,,,,,B,B,MB,GB/s,,,,,,,
+0.338118,0.000001,,,,,,,,,,0.000004,0.002707,"Pageable","Device","Tesla V100-SXM2-32GB (0)","1","7","[CUDA memcpy HtoD]",965
+0.338126,0.000001,,,,,,,,,,0.000004,0.002707,"Pageable","Device","Tesla V100-SXM2-32GB (0)","1","7","[CUDA memcpy HtoD]",966
+0.338135,0.000001,,,,,,,,,,0.000004,0.002772,"Pageable","Device","Tesla V100-SXM2-32GB (0)","1","7","[CUDA memcpy HtoD]",967
+0.338143,0.000001,,,,,,,,,,0.000004,0.002772,"Pageable","Device","Tesla V100-SXM2-32GB (0)","1","7","[CUDA memcpy HtoD]",968
+0.338152,0.000001,,,,,,,,,,0.000004,0.002707,"Pageable","Device","Tesla V100-SXM2-32GB (0)","1","7","[CUDA memcpy HtoD]",969
+0.338161,0.000001,,,,,,,,,,0.000004,0.002707,"Pageable","Device","Tesla V100-SXM2-32GB (0)","1","7","[CUDA memcpy HtoD]",970
+0.338169,0.000001,,,,,,,,,,0.000004,0.002707,"Pageable","Device","Tesla V100-SXM2-32GB (0)","1","7","[CUDA memcpy HtoD]",971
+0.338178,0.000001,,,,,,,,,,0.000004,0.002707,"Pageable","Device","Tesla V100-SXM2-32GB (0)","1","7","[CUDA memcpy HtoD]",972
+0.338190,0.000001,,,,,,,,,,0.000011,0.008122,"Pageable","Device","Tesla V100-SXM2-32GB (0)","1","7","[CUDA memcpy HtoD]",973
+0.338199,0.000001,,,,,,,,,,0.000011,0.008122,"Pageable","Device","Tesla V100-SXM2-32GB (0)","1","7","[CUDA memcpy HtoD]",974
+0.338208,0.000001,,,,,,,,,,0.000011,0.008122,"Pageable","Device","Tesla V100-SXM2-32GB (0)","1","7","[CUDA memcpy HtoD]",975
+0.338216,0.000001,,,,,,,,,,0.000011,0.008122,"Pageable","Device","Tesla V100-SXM2-32GB (0)","1","7","[CUDA memcpy HtoD]",976
+0.338458,1.760664,256,128,1,16,32,1,48,0,0,,,,,"Tesla V100-SXM2-32GB (0)","1","7","render_kernel(unsigned char*, unsigned int, unsigned int)",978
+2.099188,0.023288,,,,,,,,,,64.000000,2.683785,"Device","Pageable","Tesla V100-SXM2-32GB (0)","1","7","[CUDA memcpy DtoH]",981

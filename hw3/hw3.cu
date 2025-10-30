@@ -4,6 +4,7 @@
 #include <cstdlib>
 
 #include <lodepng.h>
+#include <cuda_runtime.h>
 
 #define pi 3.1415926535897932384626433832795
 
@@ -84,7 +85,10 @@ __host__ __device__ inline float length(const vec3& v) {
 
 __host__ __device__ inline vec3 normalize(const vec3& v) {
     float len = length(v);
-    return vec3(v.x / len, v.y / len, v.z / len);
+    if (len > 0.0f) {
+        return vec3(v.x / len, v.y / len, v.z / len);
+    }
+    return vec3(0.0f, 0.0f, 0.0f);
 }
 
 __host__ __device__ inline float vmin(float a, float b) {
@@ -123,22 +127,26 @@ __host__ __device__ inline vec3 yxy(const vec2& v) { return vec3(v.y, v.x, v.y);
 __host__ __device__ inline vec3 yyx(const vec2& v) { return vec3(v.y, v.y, v.x); }
 
 // Constants
-__constant__ int AA = 3;
-__constant__ float power = 8.0;
-__constant__ float md_iter = 24;
-__constant__ float ray_step = 10000;
-__constant__ float shadow_step = 1500;
-__constant__ float step_limiter = 0.2;
-__constant__ float ray_multiplier = 0.1;
-__constant__ float bailout = 2.0;
-__constant__ float eps = 0.0005;
-__constant__ float FOV = 1.5;
-__constant__ float far_plane = 100.0;
+constexpr int AA = 3;
+constexpr int MD_ITER = 24;
+constexpr int RAY_STEP = 10000;
+constexpr int SHADOW_STEP = 1500;
+__constant__ float power = 8.0f;
+__constant__ float step_limiter = 0.2f;
+__constant__ float ray_multiplier = 0.1f;
+__constant__ float bailout = 2.0f;
+__constant__ float eps = 0.0005f;
+__constant__ float FOV = 1.5f;
+__constant__ float far_plane = 100.0f;
 
 // Store camera and resolution in constant memory
 __constant__ float d_camera_pos_x, d_camera_pos_y, d_camera_pos_z;
 __constant__ float d_target_pos_x, d_target_pos_y, d_target_pos_z;
 __constant__ float d_iResolution_x, d_iResolution_y;
+__constant__ float3 d_cf;
+__constant__ float3 d_cs;
+__constant__ float3 d_cu;
+__constant__ float3 d_sd;
 
 // Mandelbulb distance function
 __device__ float md(vec3 p, float& trap) {
@@ -147,7 +155,7 @@ __device__ float md(vec3 p, float& trap) {
     float r = length(v);
     trap = r;
 
-    for (int i = 0; i < md_iter; ++i) {
+    for (int i = 0; i < MD_ITER; ++i) {
         float theta = atan2f(v.y, v.x) * power;
         float phi = asinf(v.z / r) * power;
         dr = power * powf(r, power - 1.0) * dr + 1.0;
@@ -184,7 +192,7 @@ __device__ vec3 pal(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
 __device__ float softshadow(vec3 ro, vec3 rd, float k) {
     float res = 1.0f;
     float t = 0.0f;
-    for (int i = 0; i < shadow_step; ++i) {
+    for (int i = 0; i < SHADOW_STEP; ++i) {
         float h = map(ro + rd * t);
         if (t > 0.0f) {
             float candidate = k * h / t;
@@ -199,7 +207,7 @@ __device__ float softshadow(vec3 ro, vec3 rd, float k) {
 
 // Calculate surface normal
 __device__ vec3 calcNor(vec3 p) {
-    vec2 e = vec2(eps, 0.0);
+    vec2 e = vec2(eps, 0.0f);
     return normalize(vec3(
         map(p + xyy(e)) - map(p - xyy(e)),
         map(p + yxy(e)) - map(p - yxy(e)),
@@ -212,7 +220,7 @@ __device__ float trace(vec3 ro, vec3 rd, float& trap, int& ID) {
     float t = 0;
     float len = 0;
 
-    for (int i = 0; i < ray_step; ++i) {
+    for (int i = 0; i < RAY_STEP; ++i) {
         len = map(ro + rd * t, trap, ID);
         if (fabsf(len) < eps || t > far_plane) break;
         t += len * ray_multiplier;
@@ -227,12 +235,11 @@ __global__ void render_kernel(unsigned char* image, unsigned int width, unsigned
     if (i >= height || j >= width) return;
 
     // Pre-compute values that don't change across AA samples
-    vec3 camera_pos = vec3(d_camera_pos_x, d_camera_pos_y, d_camera_pos_z);
-    vec3 target_pos = vec3(d_target_pos_x, d_target_pos_y, d_target_pos_z);
-    vec3 cf = normalize(target_pos - camera_pos);
-    vec3 cs = normalize(cross(cf, vec3(0., 1., 0.)));
-    vec3 cu = normalize(cross(cs, cf));
-    vec3 sd = normalize(camera_pos);
+    const vec3 camera_pos = vec3(d_camera_pos_x, d_camera_pos_y, d_camera_pos_z);
+    const vec3 cf = vec3(d_cf.x, d_cf.y, d_cf.z);
+    const vec3 cs = vec3(d_cs.x, d_cs.y, d_cs.z);
+    const vec3 cu = vec3(d_cu.x, d_cu.y, d_cu.z);
+    const vec3 sd = vec3(d_sd.x, d_sd.y, d_sd.z);
     const vec3 sc = vec3(1., .9, .717);
     const vec3 ambc = vec3(0.3);
     const float gloss = 32.0;
@@ -319,12 +326,45 @@ int main(int argc, char** argv) {
     cudaMemcpyToSymbol(d_iResolution_x, &iResolution_x, sizeof(float));
     cudaMemcpyToSymbol(d_iResolution_y, &iResolution_y, sizeof(float));
 
+    vec3 h_camera_pos(camera_pos_x, camera_pos_y, camera_pos_z);
+    vec3 h_target_pos(target_pos_x, target_pos_y, target_pos_z);
+    vec3 h_cf = normalize(h_target_pos - h_camera_pos);
+    if (length(h_cf) < 1e-6f) {
+        h_cf = vec3(0.0f, 0.0f, -1.0f);
+    }
+
+    vec3 up_vector(0.0f, 1.0f, 0.0f);
+    vec3 side_candidate = cross(h_cf, up_vector);
+    if (length(side_candidate) < 1e-4f) {
+        up_vector = vec3(0.0f, 0.0f, 1.0f);
+        side_candidate = cross(h_cf, up_vector);
+    }
+
+    vec3 h_cs = normalize(side_candidate);
+    vec3 h_cu = normalize(cross(h_cs, h_cf));
+    if (length(h_cu) < 1e-6f) {
+        h_cu = vec3(0.0f, 1.0f, 0.0f);
+    }
+
+    float cam_length = length(h_camera_pos);
+    vec3 h_sd = cam_length > 1e-6f ? h_camera_pos / cam_length : vec3(0.0f, 1.0f, 0.0f);
+
+    float3 cf_const = make_float3(h_cf.x, h_cf.y, h_cf.z);
+    float3 cs_const = make_float3(h_cs.x, h_cs.y, h_cs.z);
+    float3 cu_const = make_float3(h_cu.x, h_cu.y, h_cu.z);
+    float3 sd_const = make_float3(h_sd.x, h_sd.y, h_sd.z);
+
+    cudaMemcpyToSymbol(d_cf, &cf_const, sizeof(float3));
+    cudaMemcpyToSymbol(d_cs, &cs_const, sizeof(float3));
+    cudaMemcpyToSymbol(d_cu, &cu_const, sizeof(float3));
+    cudaMemcpyToSymbol(d_sd, &sd_const, sizeof(float3));
+
     unsigned char* d_image;
     size_t image_size = width * height * 4 * sizeof(unsigned char);
     cudaMalloc(&d_image, image_size);
 
-    // Use fixed block size (proven stable configuration)
-    dim3 blockDim(16, 32);
+    // Use 16x16 blocks to reduce per-block register pressure and improve SM occupancy
+    dim3 blockDim(16, 16);
     dim3 gridDim((width + blockDim.x - 1) / blockDim.x,
                  (height + blockDim.y - 1) / blockDim.y);
 
