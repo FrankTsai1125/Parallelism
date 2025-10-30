@@ -1,0 +1,13 @@
+==629750== NVPROF is profiling process 629750, command: ./hw3 1.1187 -1.234 -0.285 -0.282 -0.312 -0.378 4096 4096 output_06.png
+==629750== Some kernel(s) will be replayed on device 0 in order to collect all events/metrics.
+==629750== Profiling application: ./hw3 1.1187 -1.234 -0.285 -0.282 -0.312 -0.378 4096 4096 output_06.png
+==629750== Profiling result:
+==629750== Metric result:
+"Device","Kernel","Invocations","Metric Name","Metric Description","Min","Max","Avg"
+"Tesla V100-SXM2-32GB (0)","render_kernel(unsigned char*, unsigned int, unsigned int)",1,"achieved_occupancy","Achieved Occupancy",0.419197,0.419197,0.419197
+"Tesla V100-SXM2-32GB (0)","render_kernel(unsigned char*, unsigned int, unsigned int)",1,"inst_executed","Instructions Executed",2709543296614,2709543296614,2709543296614
+"Tesla V100-SXM2-32GB (0)","render_kernel(unsigned char*, unsigned int, unsigned int)",1,"flop_count_sp","Floating Point Operations(Single Precision)",11778383122437,11778383122437,11778383122437
+"Tesla V100-SXM2-32GB (0)","render_kernel(unsigned char*, unsigned int, unsigned int)",1,"dram_read_throughput","Device Memory Read Throughput",3.724775MB/s,3.724775MB/s,3.724774MB/s
+"Tesla V100-SXM2-32GB (0)","render_kernel(unsigned char*, unsigned int, unsigned int)",1,"dram_write_throughput","Device Memory Write Throughput",996.362382GB/s,996.362382GB/s,996.362382GB/s
+"Tesla V100-SXM2-32GB (0)","render_kernel(unsigned char*, unsigned int, unsigned int)",1,"branch_efficiency","Branch Efficiency",99.216731%,99.216731%,99.216731%
+==629750== Warning: One or more events or metrics overflowed. Rerun with "--print-gpu-trace" for detail.

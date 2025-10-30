@@ -182,15 +182,19 @@ __device__ vec3 pal(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
 
 // Soft shadow
 __device__ float softshadow(vec3 ro, vec3 rd, float k) {
-    float res = 1.0;
-    float t = 0.0;
+    float res = 1.0f;
+    float t = 0.0f;
     for (int i = 0; i < shadow_step; ++i) {
         float h = map(ro + rd * t);
-        res = vmin(res, k * h / t);
-        if (res < 0.02) return 0.02;
-        t += clamp(h, 0.001, step_limiter);
+        if (t > 0.0f) {
+            float candidate = k * h / t;
+            res = fminf(res, candidate);
+            if (res <= 0.02f) return 0.02f;
+        }
+        t += clamp(h, 0.001f, step_limiter);
+        if (t > far_plane) break;
     }
-    return clamp(res, 0.02, 1.0);
+    return clamp(res, 0.02f, 1.0f);
 }
 
 // Calculate surface normal
@@ -224,7 +228,8 @@ __global__ void render_kernel(unsigned char* image, unsigned int width, unsigned
 
     // Pre-compute values that don't change across AA samples
     vec3 camera_pos = vec3(d_camera_pos_x, d_camera_pos_y, d_camera_pos_z);
-    vec3 cf = normalize(vec3(d_target_pos_x, d_target_pos_y, d_target_pos_z) - camera_pos);
+    vec3 target_pos = vec3(d_target_pos_x, d_target_pos_y, d_target_pos_z);
+    vec3 cf = normalize(target_pos - camera_pos);
     vec3 cs = normalize(cross(cf, vec3(0., 1., 0.)));
     vec3 cu = normalize(cross(cs, cf));
     vec3 sd = normalize(camera_pos);
@@ -234,10 +239,15 @@ __global__ void render_kernel(unsigned char* image, unsigned int width, unsigned
 
     vec3 fcol(0.0);
 
+    const float invAA = 1.0f / (float)AA;
+    const vec2 resolution = vec2(d_iResolution_x, d_iResolution_y);
+    const vec2 screen_origin = vec2(-d_iResolution_x, -d_iResolution_y);
+    const vec2 pixel_base = vec2((float)j, (float)i);
+
     for (int m = 0; m < AA; ++m) {
         for (int n = 0; n < AA; ++n) {
-            vec2 p = vec2(j, i) + vec2(m, n) / (float)AA;
-            vec2 uv = (vec2(-d_iResolution_x, -d_iResolution_y) + 2.0 * p) / d_iResolution_y;
+            vec2 p = vec2((float)m, (float)n) * invAA;
+            vec2 uv = (screen_origin + 2.0f * (pixel_base + p)) / resolution.y;
             uv.y *= -1;
 
             vec3 rd = normalize(uv.x * cs + uv.y * cu + FOV * cf);
@@ -313,7 +323,8 @@ int main(int argc, char** argv) {
     size_t image_size = width * height * 4 * sizeof(unsigned char);
     cudaMalloc(&d_image, image_size);
 
-    dim3 blockDim(16, 16);
+    // Use fixed block size (proven stable configuration)
+    dim3 blockDim(16, 32);
     dim3 gridDim((width + blockDim.x - 1) / blockDim.x,
                  (height + blockDim.y - 1) / blockDim.y);
 
