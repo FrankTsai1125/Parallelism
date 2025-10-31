@@ -1,12 +1,6 @@
-==1438475== NVPROF is profiling process 1438475, command: ./hw3 -1.2 -0.51 -0.8 -0.271 -0.299 -0.379 4096 4096 output_08.png
-==1438475== Some kernel(s) will be replayed on device 0 in order to collect all events/metrics.
-==1438475== Profiling application: ./hw3 -1.2 -0.51 -0.8 -0.271 -0.299 -0.379 4096 4096 output_08.png
-==1438475== Profiling result:
-==1438475== Metric result:
-"Device","Kernel","Invocations","Metric Name","Metric Description","Min","Max","Avg"
-"Tesla V100-SXM2-32GB (0)","render_kernel(unsigned char*, unsigned int, unsigned int)",1,"achieved_occupancy","Achieved Occupancy",0.462967,0.462967,0.462967
-"Tesla V100-SXM2-32GB (0)","render_kernel(unsigned char*, unsigned int, unsigned int)",1,"inst_executed","Instructions Executed",3235901014712,3235901014712,3235901014712
-"Tesla V100-SXM2-32GB (0)","render_kernel(unsigned char*, unsigned int, unsigned int)",1,"flop_count_sp","Floating Point Operations(Single Precision)",14220448197689,14220448197689,14220448197689
-"Tesla V100-SXM2-32GB (0)","render_kernel(unsigned char*, unsigned int, unsigned int)",1,"dram_read_throughput","Device Memory Read Throughput",59.952468MB/s,59.952468MB/s,59.952467MB/s
-"Tesla V100-SXM2-32GB (0)","render_kernel(unsigned char*, unsigned int, unsigned int)",1,"branch_efficiency","Branch Efficiency",99.248146%,99.248146%,99.248146%
-==1438475== Warning: One or more events or metrics overflowed. Rerun with "--print-gpu-trace" for detail.
+==1947994== NVPROF is profiling process 1947994, command: ./hw3 -1.2 -0.51 -0.8 -0.271 -0.299 -0.379 4096 4096 output_08.png
+==1947994== Some kernel(s) will be replayed on device 0 in order to collect all events/metrics.
+==1947994== Profiling application: ./hw3 -1.2 -0.51 -0.8 -0.271 -0.299 -0.379 4096 4096 output_08.png
+==1947994== Profiling result:
+No events/metrics were profiled.
+==1947994== Warning: Some profiling data are not recorded.

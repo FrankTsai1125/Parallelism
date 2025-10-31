@@ -149,18 +149,34 @@ __constant__ float3 d_cu;
 __constant__ float3 d_sd;
 
 // Mandelbulb distance function
-__device__ float md(vec3 p, float& trap) {
+__device__ float md(const vec3& p, float& trap) {
     vec3 v = p;
     float dr = 1.0;
     float r = length(v);
     trap = r;
 
     for (int i = 0; i < MD_ITER; ++i) {
+        float inv_r = fmaxf(r, 1e-6f);
+        inv_r = 1.0f / inv_r;
+
         float theta = atan2f(v.y, v.x) * power;
-        float phi = asinf(v.z / r) * power;
-        dr = power * powf(r, power - 1.0) * dr + 1.0;
-        v = p + powf(r, power) *
-                vec3(cosf(theta) * cosf(phi), cosf(phi) * sinf(theta), -sinf(phi));
+        float phi = asinf(fmaxf(fminf(v.z * inv_r, 1.0f), -1.0f)) * power;
+
+        float sinTheta, cosTheta;
+        float sinPhi, cosPhi;
+        sincosf(theta, &sinTheta, &cosTheta);
+        sincosf(phi, &sinPhi, &cosPhi);
+
+        float r2 = r * r;
+        float r4 = r2 * r2;
+        float r6 = r4 * r2;
+        float r7 = r6 * r;
+        float r8 = r4 * r4;
+
+        dr = power * r7 * dr + 1.0f;
+        v = p + r8 * vec3(cosTheta * cosPhi,
+                          cosPhi * sinTheta,
+                          -sinPhi);
 
         trap = vmin(trap, r);
 
@@ -171,13 +187,13 @@ __device__ float md(vec3 p, float& trap) {
 }
 
 // Scene mapping - 90 degree rotation around X-axis: (x,y,z) -> (x,-z,y)
-__device__ float map(vec3 p, float& trap, int& ID) {
+__device__ float map(const vec3& p, float& trap, int& ID) {
     vec3 rp = vec3(p.x, -p.z, p.y);  // 90 deg rotation, no trig functions needed!
     ID = 1;
     return md(rp, trap);
 }
 
-__device__ float map(vec3 p) {
+__device__ float map(const vec3& p) {
     float dmy;
     int dmy2;
     return map(p, dmy, dmy2);
@@ -189,7 +205,7 @@ __device__ vec3 pal(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
 }
 
 // Soft shadow
-__device__ float softshadow(vec3 ro, vec3 rd, float k) {
+__device__ float softshadow(const vec3& ro, const vec3& rd, float k) {
     float res = 1.0f;
     float t = 0.0f;
     for (int i = 0; i < SHADOW_STEP; ++i) {
@@ -198,6 +214,7 @@ __device__ float softshadow(vec3 ro, vec3 rd, float k) {
             float candidate = k * h / t;
             res = fminf(res, candidate);
             if (res <= 0.02f) return 0.02f;
+            if (res >= 0.99f && h >= 0.5f && t >= 5.0f) return 1.0f;
         }
         t += clamp(h, 0.001f, step_limiter);
         if (t > far_plane) break;
@@ -206,7 +223,7 @@ __device__ float softshadow(vec3 ro, vec3 rd, float k) {
 }
 
 // Calculate surface normal
-__device__ vec3 calcNor(vec3 p) {
+__device__ vec3 calcNor(const vec3& p) {
     vec2 e = vec2(eps, 0.0f);
     return normalize(vec3(
         map(p + xyy(e)) - map(p - xyy(e)),
@@ -216,7 +233,7 @@ __device__ vec3 calcNor(vec3 p) {
 }
 
 // Ray tracing
-__device__ float trace(vec3 ro, vec3 rd, float& trap, int& ID) {
+__device__ float trace(const vec3& ro, const vec3& rd, float& trap, int& ID) {
     float t = 0;
     float len = 0;
 
@@ -229,6 +246,7 @@ __device__ float trace(vec3 ro, vec3 rd, float& trap, int& ID) {
 }
 
 // Main kernel
+__launch_bounds__(256, 4)
 __global__ void render_kernel(unsigned char* image, unsigned int width, unsigned int height) {
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     int i = blockIdx.y * blockDim.y + threadIdx.y;

@@ -1,13 +1,13 @@
-==1310357== NVPROF is profiling process 1310357, command: ./hw3 -0.522 2.874 1.340 0 0 0 64 64 output_00.png
-==1310357== Some kernel(s) will be replayed on device 0 in order to collect all events/metrics.
-==1310357== Profiling application: ./hw3 -0.522 2.874 1.340 0 0 0 64 64 output_00.png
-==1310357== Profiling result:
-==1310357== Metric result:
+==1786177== NVPROF is profiling process 1786177, command: ./hw3 -0.522 2.874 1.340 0 0 0 64 64 output_00.png
+==1786177== Some kernel(s) will be replayed on device 0 in order to collect all events/metrics.
+==1786177== Profiling application: ./hw3 -0.522 2.874 1.340 0 0 0 64 64 output_00.png
+==1786177== Profiling result:
+==1786177== Metric result:
 "Device","Kernel","Invocations","Metric Name","Metric Description","Min","Max","Avg"
-"Tesla V100-SXM2-32GB (0)","render_kernel(unsigned char*, unsigned int, unsigned int)",1,"achieved_occupancy","Achieved Occupancy",0.065459,0.065459,0.065459
-"Tesla V100-SXM2-32GB (0)","render_kernel(unsigned char*, unsigned int, unsigned int)",1,"sm_efficiency","Multiprocessor Activity",2.361226%,2.361226%,2.361226%
+"Tesla V100-SXM2-32GB (0)","render_kernel(unsigned char*, unsigned int, unsigned int)",1,"achieved_occupancy","Achieved Occupancy",0.054617,0.054617,0.054617
+"Tesla V100-SXM2-32GB (0)","render_kernel(unsigned char*, unsigned int, unsigned int)",1,"sm_efficiency","Multiprocessor Activity",2.770640%,2.770640%,2.770640%
 "Tesla V100-SXM2-32GB (0)","render_kernel(unsigned char*, unsigned int, unsigned int)",1,"inst_executed","Instructions Executed",678874609,678874609,678874609
 "Tesla V100-SXM2-32GB (0)","render_kernel(unsigned char*, unsigned int, unsigned int)",1,"flop_count_sp","Floating Point Operations(Single Precision)",1234003083,1234003083,1234003083
-"Tesla V100-SXM2-32GB (0)","render_kernel(unsigned char*, unsigned int, unsigned int)",1,"dram_read_throughput","Device Memory Read Throughput",1.041569MB/s,1.041569MB/s,1.041568MB/s
-"Tesla V100-SXM2-32GB (0)","render_kernel(unsigned char*, unsigned int, unsigned int)",1,"dram_write_throughput","Device Memory Write Throughput",19.337798MB/s,19.337798MB/s,19.337797MB/s
+"Tesla V100-SXM2-32GB (0)","render_kernel(unsigned char*, unsigned int, unsigned int)",1,"dram_read_throughput","Device Memory Read Throughput",318.091797KB/s,318.091797KB/s,318.090820KB/s
+"Tesla V100-SXM2-32GB (0)","render_kernel(unsigned char*, unsigned int, unsigned int)",1,"dram_write_throughput","Device Memory Write Throughput",2.751096MB/s,2.751096MB/s,2.751095MB/s
 "Tesla V100-SXM2-32GB (0)","render_kernel(unsigned char*, unsigned int, unsigned int)",1,"branch_efficiency","Branch Efficiency",94.723797%,94.723797%,94.723797%
