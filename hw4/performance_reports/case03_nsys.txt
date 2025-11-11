@@ -1,0 +1,98 @@
+srun: INFO: Try to avoid using --ntasks
+srun: INFO: It is recommended to specify `--nodes` and `--ntasks-per-node` together
+Total blocks to mine: 1
+
+========== Solving Block 1/1 (Sequential) ==========
+start hashing
+merkle root(little): af7d2d8c748125eb6b30f82d0c3d0c992a63f0391c7aec73135be94806f8c99f
+merkle root(big):    9fc9f80648e95b1373ec7a1c39f0632a990c3d0c2df8306beb2581748c2d7daf
+Block info (big): 
+  version:  20000000
+  pervhash: 0000000000000000000e2969067f2304a25004a2462e1114a262bc1740b722ff
+  merkleroot: 9fc9f80648e95b1373ec7a1c39f0632a990c3d0c2df8306beb2581748c2d7daf
+  nbits:    1749500d
+  ntime:    5ad3327e
+  nonce:    ???
+
+Target value (big): 00000000000000000049500d0000000000000000000000000000000000000000
+Mining with CUDA: 2048 blocks x 256 threads = 524288 parallel threads
+Block structure size: 80 bytes
+Searching nonce range: 0x00000000 to 0xffffffff (adaptive chunks)
+Search completed.
+Solution found: nonce = 0x16e80820
+Found Solution!!
+hash # 384305184 (big): 0000000000000000000870497004514bd3807cdc98b9f3a57038faf5df04144f
+
+hash(little): 4f1404dff5fa3870a5f3b998dc7c80d34b510470497008000000000000000000
+hash(big):    0000000000000000000870497004514bd3807cdc98b9f3a57038faf5df04144f
+
+Collecting data...
+Generating '/tmp/nsys-report-7114.qdstrm'
+[1/8] [0%                          ] case03_profile.nsys-rep[1/8] [0%                          ] case03_profile.nsys-rep[1/8] [========41%                 ] case03_profile.nsys-rep[1/8] [======33%                   ] case03_profile.nsys-rep[1/8] [=========43%                ] case03_profile.nsys-rep[1/8] [=========44%                ] case03_profile.nsys-rep[1/8] [===========51%              ] case03_profile.nsys-rep[1/8] [=============59%            ] case03_profile.nsys-rep[1/8] [======================92%   ] case03_profile.nsys-rep[1/8] [========================100%] case03_profile.nsys-rep[1/8] [========================100%] case03_profile.nsys-rep
+[2/8] [0%                          ] case03_profile.sqlite[2/8] [1%                          ] case03_profile.sqlite[2/8] [2%                          ] case03_profile.sqlite[2/8] [3%                          ] case03_profile.sqlite[2/8] [4%                          ] case03_profile.sqlite[2/8] [5%                          ] case03_profile.sqlite[2/8] [6%                          ] case03_profile.sqlite[2/8] [7%                          ] case03_profile.sqlite[2/8] [8%                          ] case03_profile.sqlite[2/8] [9%                          ] case03_profile.sqlite[2/8] [10%                         ] case03_profile.sqlite[2/8] [11%                         ] case03_profile.sqlite[2/8] [12%                         ] case03_profile.sqlite[2/8] [13%                         ] case03_profile.sqlite[2/8] [14%                         ] case03_profile.sqlite[2/8] [=15%                        ] case03_profile.sqlite[2/8] [=16%                        ] case03_profile.sqlite[2/8] [=17%                        ] case03_profile.sqlite[2/8] [==18%                       ] case03_profile.sqlite[2/8] [==19%                       ] case03_profile.sqlite[2/8] [==20%                       ] case03_profile.sqlite[2/8] [==21%                       ] case03_profile.sqlite[2/8] [===22%                      ] case03_profile.sqlite[2/8] [===23%                      ] case03_profile.sqlite[2/8] [===24%                      ] case03_profile.sqlite[2/8] [====25%                     ] case03_profile.sqlite[2/8] [====26%                     ] case03_profile.sqlite[2/8] [====27%                     ] case03_profile.sqlite[2/8] [====28%                     ] case03_profile.sqlite[2/8] [=====29%                    ] case03_profile.sqlite[2/8] [=====30%                    ] case03_profile.sqlite[2/8] [=====31%                    ] case03_profile.sqlite[2/8] [=====32%                    ] case03_profile.sqlite[2/8] [======33%                   ] case03_profile.sqlite[2/8] [======34%                   ] case03_profile.sqlite[2/8] [======35%                   ] case03_profile.sqlite[2/8] [=======36%                  ] case03_profile.sqlite[2/8] [=======37%                  ] case03_profile.sqlite[2/8] [=======38%                  ] case03_profile.sqlite[2/8] [=======39%                  ] case03_profile.sqlite[2/8] [========40%                 ] case03_profile.sqlite[2/8] [========41%                 ] case03_profile.sqlite[2/8] [========42%                 ] case03_profile.sqlite[2/8] [=========43%                ] case03_profile.sqlite[2/8] [=========44%                ] case03_profile.sqlite[2/8] [=========45%                ] case03_profile.sqlite[2/8] [=========46%                ] case03_profile.sqlite[2/8] [==========47%               ] case03_profile.sqlite[2/8] [==========48%               ] case03_profile.sqlite[2/8] [==========49%               ] case03_profile.sqlite[2/8] [===========50%              ] case03_profile.sqlite[2/8] [===========51%              ] case03_profile.sqlite[2/8] [===========52%              ] case03_profile.sqlite[2/8] [===========53%              ] case03_profile.sqlite[2/8] [============54%             ] case03_profile.sqlite[2/8] [============55%             ] case03_profile.sqlite[2/8] [============56%             ] case03_profile.sqlite[2/8] [============57%             ] case03_profile.sqlite[2/8] [=============58%            ] case03_profile.sqlite[2/8] [=============59%            ] case03_profile.sqlite[2/8] [=============60%            ] case03_profile.sqlite[2/8] [==============61%           ] case03_profile.sqlite[2/8] [==============62%           ] case03_profile.sqlite[2/8] [==============63%           ] case03_profile.sqlite[2/8] [==============64%           ] case03_profile.sqlite[2/8] [===============65%          ] case03_profile.sqlite[2/8] [===============66%          ] case03_profile.sqlite[2/8] [===============67%          ] case03_profile.sqlite[2/8] [================68%         ] case03_profile.sqlite[2/8] [================69%         ] case03_profile.sqlite[2/8] [================70%         ] case03_profile.sqlite[2/8] [================71%         ] case03_profile.sqlite[2/8] [=================72%        ] case03_profile.sqlite[2/8] [=================73%        ] case03_profile.sqlite[2/8] [=================74%        ] case03_profile.sqlite[2/8] [==================75%       ] case03_profile.sqlite[2/8] [==================76%       ] case03_profile.sqlite[2/8] [==================77%       ] case03_profile.sqlite[2/8] [==================78%       ] case03_profile.sqlite[2/8] [===================79%      ] case03_profile.sqlite[2/8] [===================80%      ] case03_profile.sqlite[2/8] [===================81%      ] case03_profile.sqlite[2/8] [===================82%      ] case03_profile.sqlite[2/8] [====================83%     ] case03_profile.sqlite[2/8] [====================84%     ] case03_profile.sqlite[2/8] [====================85%     ] case03_profile.sqlite[2/8] [=====================86%    ] case03_profile.sqlite[2/8] [=====================87%    ] case03_profile.sqlite[2/8] [=====================88%    ] case03_profile.sqlite[2/8] [=====================89%    ] case03_profile.sqlite[2/8] [======================90%   ] case03_profile.sqlite[2/8] [======================91%   ] case03_profile.sqlite[2/8] [======================92%   ] case03_profile.sqlite[2/8] [=======================93%  ] case03_profile.sqlite[2/8] [=======================94%  ] case03_profile.sqlite[2/8] [=======================95%  ] case03_profile.sqlite[2/8] [=======================96%  ] case03_profile.sqlite[2/8] [========================97% ] case03_profile.sqlite[2/8] [========================98% ] case03_profile.sqlite[2/8] [========================99% ] case03_profile.sqlite[2/8] [========================100%] case03_profile.sqlite[2/8] [========================100%] case03_profile.sqlite
+SKIPPED: /home/p13922006/Parallelism/hw4/performance_reports/case03_profile.sqlite does not contain NV Tools Extension (NVTX) data.
+[3/8] Executing 'nvtx_sum' stats report
+[4/8] Executing 'osrt_sum' stats report
+
+ Time (%)  Total Time (ns)  Num Calls    Avg (ns)       Med (ns)     Min (ns)    Max (ns)    StdDev (ns)            Name         
+ --------  ---------------  ---------  -------------  -------------  ---------  -----------  ------------  ----------------------
+     45.1      462,585,697         18   25,699,205.4    4,670,273.5      1,082  162,768,240  46,218,809.2  poll                  
+     44.0      450,927,935          4  112,731,983.8  116,383,846.0    441,380  217,718,863  88,866,555.0  sem_wait              
+      8.3       85,140,452        693      122,857.8       33,499.0      1,037   29,501,847   1,134,014.4  ioctl                 
+      0.9        9,398,618          1    9,398,618.0    9,398,618.0  9,398,618    9,398,618           0.0  pthread_cond_wait     
+      0.8        8,038,579          1    8,038,579.0    8,038,579.0  8,038,579    8,038,579           0.0  pthread_cond_broadcast
+      0.4        3,962,351         44       90,053.4        3,492.5      1,455    3,538,204     532,302.8  fopen                 
+      0.2        2,440,771         15      162,718.1       39,952.0      1,012      914,184     299,314.2  write                 
+      0.1        1,517,294         41       37,007.2        5,523.0      3,906    1,124,102     174,338.0  mmap64                
+      0.1          839,899          5      167,979.8       91,547.0     88,385      467,096     167,312.3  pthread_create        
+      0.0          372,203         69        5,394.2        5,162.0      1,055       13,886       2,569.0  open64                
+      0.0          190,235         35        5,435.3        1,281.0      1,102      125,300      20,961.5  fclose                
+      0.0           96,970         14        6,926.4        3,537.0      1,474       36,482       8,996.0  mmap                  
+      0.0           56,123          1       56,123.0       56,123.0     56,123       56,123           0.0  fgets                 
+      0.0           30,080          7        4,297.1        4,718.0      1,235        6,505       1,835.3  open                  
+      0.0           11,511          4        2,877.8        3,244.5      1,722        3,300         771.0  munmap                
+      0.0           11,437          3        3,812.3        4,040.0      2,537        4,860       1,178.1  pipe2                 
+      0.0            8,413          2        4,206.5        4,206.5      3,610        4,803         843.6  socket                
+      0.0            7,582          1        7,582.0        7,582.0      7,582        7,582           0.0  connect               
+      0.0            6,204          3        2,068.0        2,396.0      1,368        2,440         606.6  read                  
+      0.0            3,059          2        1,529.5        1,529.5      1,170        1,889         508.4  fwrite                
+      0.0            2,064          1        2,064.0        2,064.0      2,064        2,064           0.0  bind                  
+
+[5/8] Executing 'cuda_api_sum' stats report
+
+ Time (%)  Total Time (ns)  Num Calls    Avg (ns)       Med (ns)     Min (ns)   Max (ns)     StdDev (ns)             Name           
+ --------  ---------------  ---------  -------------  -------------  --------  -----------  -------------  -------------------------
+     65.5      215,986,805          2  107,993,402.5  107,993,402.5     9,684  215,977,121  152,712,039.2  cudaMemcpyAsync          
+     34.2      112,534,579          2   56,267,289.5   56,267,289.5     4,552  112,530,027   79,567,526.4  cudaMalloc               
+      0.1          343,329          2      171,664.5      171,664.5     5,949      337,380      234,357.1  cudaMemcpyToSymbol       
+      0.1          327,742          2      163,871.0      163,871.0    21,449      306,293      201,415.1  cudaFree                 
+      0.0          156,545          1      156,545.0      156,545.0   156,545      156,545            0.0  cudaLaunchKernel         
+      0.0           69,981          1       69,981.0       69,981.0    69,981       69,981            0.0  cudaStreamDestroy        
+      0.0           47,919          1       47,919.0       47,919.0    47,919       47,919            0.0  cudaMemcpy               
+      0.0           39,465          1       39,465.0       39,465.0    39,465       39,465            0.0  cudaStreamCreateWithFlags
+      0.0           20,174          1       20,174.0       20,174.0    20,174       20,174            0.0  cudaStreamSynchronize    
+      0.0            1,423          1        1,423.0        1,423.0     1,423        1,423            0.0  cuModuleGetLoadingMode   
+
+[6/8] Executing 'cuda_gpu_kern_sum' stats report
+
+ Time (%)  Total Time (ns)  Instances    Avg (ns)       Med (ns)      Min (ns)     Max (ns)    StdDev (ns)                                Name                              
+ --------  ---------------  ---------  -------------  -------------  -----------  -----------  -----------  ----------------------------------------------------------------
+    100.0      215,962,380          1  215,962,380.0  215,962,380.0  215,962,380  215,962,380          0.0  mine_bitcoin_kernel(unsigned char *, DeviceWork *, unsigned int)
+
+[7/8] Executing 'cuda_gpu_mem_time_sum' stats report
+
+ Time (%)  Total Time (ns)  Count  Avg (ns)  Med (ns)  Min (ns)  Max (ns)  StdDev (ns)           Operation          
+ --------  ---------------  -----  --------  --------  --------  --------  -----------  ----------------------------
+     67.5            4,128      4   1,032.0     960.0       928     1,280        166.0  [CUDA memcpy Host-to-Device]
+     32.5            1,984      1   1,984.0   1,984.0     1,984     1,984          0.0  [CUDA memcpy Device-to-Host]
+
+[8/8] Executing 'cuda_gpu_mem_size_sum' stats report
+
+ Total (MB)  Count  Avg (MB)  Med (MB)  Min (MB)  Max (MB)  StdDev (MB)           Operation          
+ ----------  -----  --------  --------  --------  --------  -----------  ----------------------------
+      0.000      4     0.000     0.000     0.000     0.000        0.000  [CUDA memcpy Host-to-Device]
+      0.000      1     0.000     0.000     0.000     0.000        0.000  [CUDA memcpy Device-to-Host]
+
+Generated:
+    /home/p13922006/Parallelism/hw4/performance_reports/case03_profile.nsys-rep
+    /home/p13922006/Parallelism/hw4/performance_reports/case03_profile.sqlite

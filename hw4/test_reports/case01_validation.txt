@@ -1,0 +1,48 @@
+merkle root(little): 67910f2319afaef988a0177ad57bdb40adc972c7d4e9acb02e9b0a2a349ceb7b
+merkle root(big):    7beb9c342a0a9b2eb0ace9d4c772c9ad40db7bd57a17a088f9aeaf19230f9167
+Block info (big): 
+  version:  20000000
+  pervhash: 0000000000000000003348540cbfc68b70825e7abcd5a83a48a5f87fa7f1aace
+  merkleroot: 7beb9c342a0a9b2eb0ace9d4c772c9ad40db7bd57a17a088f9aeaf19230f9167
+  nbits:    17502ab7
+  ntime:    5ac22f8b
+  nonce:    ???
+
+Target value (big): 000000000000000000502ab70000000000000000000000000000000000000000
+correct
+merkle root(little): 3ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a
+merkle root(big):    4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b
+Block info (big): 
+  version:  00000001
+  pervhash: 0000000000000000000000000000000000000000000000000000000000000000
+  merkleroot: 4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b
+  nbits:    1d00ffff
+  ntime:    495fab29
+  nonce:    ???
+
+Target value (big): 00000000ffff0000000000000000000000000000000000000000000000000000
+correct
+merkle root(little): ecd0aae650b83eb207d186cd42afd1442dd900888a2e7465dea4f27999acb4e2
+merkle root(big):    e2b4ac9979f2a4de65742e8a8800d92d44d1af42cd86d107b23eb850e6aad0ec
+Block info (big): 
+  version:  00000001
+  pervhash: 000000000000807094aae1363f0f4ee8e7c19a2272cb2e76a864864dc9179d08
+  merkleroot: e2b4ac9979f2a4de65742e8a8800d92d44d1af42cd86d107b23eb850e6aad0ec
+  nbits:    1b0098fa
+  ntime:    4dbf3ed7
+  nonce:    ???
+
+Target value (big): 00000000000098fa000000000000000000000000000000000000000000000000
+correct
+merkle root(little): 409839bdfe15723ae3bc8431b9ebd551090364aafa84fc778afaea499ebd0c30
+merkle root(big):    300cbd9e49eafa8a77fc84faaa64030951d5ebb93184bce33a7215febd399840
+Block info (big): 
+  version:  20000000
+  pervhash: 0000000000000000003acf570aa1014a6a187c9977c987450948210e2481eceb
+  merkleroot: 300cbd9e49eafa8a77fc84faaa64030951d5ebb93184bce33a7215febd399840
+  nbits:    17502ab7
+  ntime:    5ac78d86
+  nonce:    ???
+
+Target value (big): 000000000000000000502ab70000000000000000000000000000000000000000
+correct

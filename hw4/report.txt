@@ -1,0 +1,54 @@
+# GPU Persistent-Kernel Optimization Plan
+
+## Current Issues Observed
+- Recent persistent-kernel prototype regressed performance (case01 ~20 s vs 9 s baseline).
+- Nsight shows the kernel now runs the full 2^32 nonce space each launch, losing the early-exit benefit.
+- Host busy-wait loop (poll + nanosleep + sem_wait) consumes >30% of runtime.
+- Multi-block run still launches kernels sequentially; each block now costs ~3 s, so case01 totals ~12 s just in GPU time.
+
+## Goal
+Transform the miner into a truly persistent kernel that:
+1. Uses device-side atomic work queues (small batches) to reduce wasted work once a solution is found.
+2. Allows a single persistent kernel to serve multiple block headers concurrently.
+
+## Step-by-Step Optimization Plan
+
+### Step 0: Restore Baseline
+- Revert to the previous chunk-based implementation (case00/01/02/03 ≈ 7/9/5/5 s) to fix a reference point.
+- Verify via `make`, `./run_all.sh`, `./run_performance.sh`; keep reports for comparison.
+
+### Step 1: Device Work Structure (single block)
+- Define `struct DeviceWork { uint64_t next_nonce; uint64_t end_nonce; int found; uint32_t result; }` in device-visible memory.
+- Initialize it once on host (pinned or managed memory). Threads iterate in batches (e.g. 4K–8K nonces), updating `next_nonce` via `atomicAdd`.
+- Kernel becomes a loop: fetch-batch → hash → check `found` → repeat, rather than separate launches per chunk.
+
+### Step 2: Non-blocking host polling (single block)
+- Use `cudaStreamQuery` / `cudaEventQuery` combined with host-pinned `found` flag; sync only when the kernel finishes or when `found` toggles.
+- Confirm timings remain comparable to the baseline after replacing chunk launches with batched persistent work.
+
+### Step 3: Multi-work queue (host-managed)
+- Maintain an array of `DeviceWork` (one per block) on host. Still launch the kernel sequentially per block, but reuse the new work/batch infrastructure.
+- Ensures infrastructure works for multiple blocks without introducing concurrency yet.
+
+### Step 4: Device-side task queue (shared persistent kernel)
+- Move `DeviceWork` array to device memory and add `__device__ int global_task_idx`.
+- Launch a single persistent kernel; each thread block grabs the next task via `atomicAdd(global_task_idx)` and processes it in batches.
+- When all tasks are consumed, the kernel exits; blocks that find a nonce update their `DeviceWork` record.
+
+### Step 5: Result reporting & sync
+- Each `DeviceWork` should have host-pinned result buffers; after kernel completion, host reads them directly (one `cudaDeviceSynchronize` total).
+- Re-run case01 to ensure all four blocks now run within the same kernel and share work efficiently (target: 2–3 s total).
+
+### Step 6: Cleanup & tuning
+- Merge midstate/target setup into unified device buffers; remove legacy chunk-only code.
+- Expose batch size / launch parameters for tuning (e.g. start with 4096, adjust to balance early exit and efficiency).
+- Expand to multi-GPU if needed or adjust `cudaOccupancyMaxPotentialBlockSize` for best utilization.
+
+### Validation Checklist for Each Step
+1. `make`
+2. `./run_all.sh`
+3. `./run_performance.sh`
+4. Compare against previous step & baseline (capture Nsight, `/usr/bin/time`)
+5. Run `hw4-judge` after significant milestones (avoid cooldown penalties)
+
+Following these steps keeps the program functional at each stage while incrementally evolving toward a shared persistent-kernel design that minimizes wasted work and allows concurrent processing of multiple block headers.
