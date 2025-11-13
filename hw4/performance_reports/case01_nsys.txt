@@ -1,98 +1,8 @@
 srun: INFO: Try to avoid using --ntasks
 srun: INFO: It is recommended to specify `--nodes` and `--ntasks-per-node` together
-Total blocks to mine: 4
-
-========== Using Parallel Streams for 4 blocks ==========
-
-========== Reading Block 1/4 ==========
-start hashing
-merkle root(little): 67910f2319afaef988a0177ad57bdb40adc972c7d4e9acb02e9b0a2a349ceb7b
-merkle root(big):    7beb9c342a0a9b2eb0ace9d4c772c9ad40db7bd57a17a088f9aeaf19230f9167
-Block info (big): 
-  version:  20000000
-  pervhash: 0000000000000000003348540cbfc68b70825e7abcd5a83a48a5f87fa7f1aace
-  merkleroot: 7beb9c342a0a9b2eb0ace9d4c772c9ad40db7bd57a17a088f9aeaf19230f9167
-  nbits:    17502ab7
-  ntime:    5ac22f8b
-  nonce:    ???
-Target value (big): 000000000000000000502ab70000000000000000000000000000000000000000
-
-========== Reading Block 2/4 ==========
-start hashing
-merkle root(little): 3ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a
-merkle root(big):    4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b
-Block info (big): 
-  version:  00000001
-  pervhash: 0000000000000000000000000000000000000000000000000000000000000000
-  merkleroot: 4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b
-  nbits:    1d00ffff
-  ntime:    495fab29
-  nonce:    ???
-Target value (big): 00000000ffff0000000000000000000000000000000000000000000000000000
-
-========== Reading Block 3/4 ==========
-start hashing
-merkle root(little): ecd0aae650b83eb207d186cd42afd1442dd900888a2e7465dea4f27999acb4e2
-merkle root(big):    e2b4ac9979f2a4de65742e8a8800d92d44d1af42cd86d107b23eb850e6aad0ec
-Block info (big): 
-  version:  00000001
-  pervhash: 000000000000807094aae1363f0f4ee8e7c19a2272cb2e76a864864dc9179d08
-  merkleroot: e2b4ac9979f2a4de65742e8a8800d92d44d1af42cd86d107b23eb850e6aad0ec
-  nbits:    1b0098fa
-  ntime:    4dbf3ed7
-  nonce:    ???
-Target value (big): 00000000000098fa000000000000000000000000000000000000000000000000
-
-========== Reading Block 4/4 ==========
-start hashing
-merkle root(little): 409839bdfe15723ae3bc8431b9ebd551090364aafa84fc778afaea499ebd0c30
-merkle root(big):    300cbd9e49eafa8a77fc84faaa64030951d5ebb93184bce33a7215febd399840
-Block info (big): 
-  version:  20000000
-  pervhash: 0000000000000000003acf570aa1014a6a187c9977c987450948210e2481eceb
-  merkleroot: 300cbd9e49eafa8a77fc84faaa64030951d5ebb93184bce33a7215febd399840
-  nbits:    17502ab7
-  ntime:    5ac78d86
-  nonce:    ???
-Target value (big): 000000000000000000502ab70000000000000000000000000000000000000000
-
-========== Starting Parallel Mining on 4 Blocks (sequential processing) ==========
-
-
-========== Solving Block 1/4 ==========
-Solution found: nonce = 0x4613a05e
-hash(little): 43708ec43a810c3bb185b59b56a1f7fd8c84d2a9db9e37000000000000000000
-hash(big):    000000000000000000379edba9d2848cfdf7a1569bb585b13b0c813ac48e7043
-
-========== Solving Block 2/4 ==========
-Solution found: nonce = 0x7c2bac1d
-hash(little): 6fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000
-hash(big):    000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f
-
-========== Solving Block 3/4 ==========
-Solution found: nonce = 0x0270a407
-hash(little): d2299d7f6f978da6617167d8a45e1217de380cbe3720bc0a1204000000000000
-hash(big):    00000000000004120abc2037be0c38de17125ea4d8677161a68d976f7f9d29d2
-
-========== Solving Block 4/4 ==========
-Solution found: nonce = 0xeb4b2785
-hash(little): 74af861e8e0d1e13c991ea0dc889dc3513f7a842e47a0e000000000000000000
-hash(big):    0000000000000000000e7ae442a8f71335dc89c80dea91c9131e0d8e1e86af74
-
-========== Block 1/4 Results ==========
-hash #1175691358 (big): 000000000000000000379edba9d2848cfdf7a1569bb585b13b0c813ac48e7043
-
-========== Block 2/4 Results ==========
-hash #2083236893 (big): 000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f
-
-========== Block 3/4 Results ==========
-hash #  40936455 (big): 00000000000004120abc2037be0c38de17125ea4d8677161a68d976f7f9d29d2
-
-========== Block 4/4 Results ==========
-hash #3947571077 (big): 0000000000000000000e7ae442a8f71335dc89c80dea91c9131e0d8e1e86af74
 Collecting data...
-Generating '/tmp/nsys-report-e8e0.qdstrm'
-[1/8] [0%                          ] case01_profile.nsys-rep[1/8] [0%                          ] case01_profile.nsys-rep[1/8] [=======39%                  ] case01_profile.nsys-rep[1/8] [12%                         ] case01_profile.nsys-rep[1/8] [=========46%                ] case01_profile.nsys-rep[1/8] [==========47%               ] case01_profile.nsys-rep[1/8] [==========48%               ] case01_profile.nsys-rep[1/8] [==========49%               ] case01_profile.nsys-rep[1/8] [===========50%              ] case01_profile.nsys-rep[1/8] [==============62%           ] case01_profile.nsys-rep[1/8] [==============63%           ] case01_profile.nsys-rep[1/8] [==================76%       ] case01_profile.nsys-rep[1/8] [======================90%   ] case01_profile.nsys-rep[1/8] [=======================96%  ] case01_profile.nsys-rep[1/8] [========================100%] case01_profile.nsys-rep[1/8] [========================100%] case01_profile.nsys-rep
+Generating '/tmp/nsys-report-32b9.qdstrm'
+[1/8] [0%                          ] case01_profile.nsys-rep[1/8] [0%                          ] case01_profile.nsys-rep[1/8] [=======39%                  ] case01_profile.nsys-rep[1/8] [13%                         ] case01_profile.nsys-rep[1/8] [=========46%                ] case01_profile.nsys-rep[1/8] [==========47%               ] case01_profile.nsys-rep[1/8] [==========48%               ] case01_profile.nsys-rep[1/8] [==========49%               ] case01_profile.nsys-rep[1/8] [==============63%           ] case01_profile.nsys-rep[1/8] [==============64%           ] case01_profile.nsys-rep[1/8] [==================76%       ] case01_profile.nsys-rep[1/8] [=====================89%    ] case01_profile.nsys-rep[1/8] [======================90%   ] case01_profile.nsys-rep[1/8] [=======================96%  ] case01_profile.nsys-rep[1/8] [========================100%] case01_profile.nsys-rep[1/8] [========================100%] case01_profile.nsys-rep
 [2/8] [0%                          ] case01_profile.sqlite[2/8] [1%                          ] case01_profile.sqlite[2/8] [2%                          ] case01_profile.sqlite[2/8] [3%                          ] case01_profile.sqlite[2/8] [4%                          ] case01_profile.sqlite[2/8] [5%                          ] case01_profile.sqlite[2/8] [6%                          ] case01_profile.sqlite[2/8] [7%                          ] case01_profile.sqlite[2/8] [8%                          ] case01_profile.sqlite[2/8] [9%                          ] case01_profile.sqlite[2/8] [10%                         ] case01_profile.sqlite[2/8] [11%                         ] case01_profile.sqlite[2/8] [12%                         ] case01_profile.sqlite[2/8] [13%                         ] case01_profile.sqlite[2/8] [14%                         ] case01_profile.sqlite[2/8] [=15%                        ] case01_profile.sqlite[2/8] [=16%                        ] case01_profile.sqlite[2/8] [=17%                        ] case01_profile.sqlite[2/8] [==18%                       ] case01_profile.sqlite[2/8] [==19%                       ] case01_profile.sqlite[2/8] [==20%                       ] case01_profile.sqlite[2/8] [==21%                       ] case01_profile.sqlite[2/8] [===22%                      ] case01_profile.sqlite[2/8] [===23%                      ] case01_profile.sqlite[2/8] [===24%                      ] case01_profile.sqlite[2/8] [====25%                     ] case01_profile.sqlite[2/8] [====26%                     ] case01_profile.sqlite[2/8] [====27%                     ] case01_profile.sqlite[2/8] [====28%                     ] case01_profile.sqlite[2/8] [=====29%                    ] case01_profile.sqlite[2/8] [=====30%                    ] case01_profile.sqlite[2/8] [=====31%                    ] case01_profile.sqlite[2/8] [=====32%                    ] case01_profile.sqlite[2/8] [======33%                   ] case01_profile.sqlite[2/8] [======34%                   ] case01_profile.sqlite[2/8] [======35%                   ] case01_profile.sqlite[2/8] [=======36%                  ] case01_profile.sqlite[2/8] [=======37%                  ] case01_profile.sqlite[2/8] [=======38%                  ] case01_profile.sqlite[2/8] [=======39%                  ] case01_profile.sqlite[2/8] [========40%                 ] case01_profile.sqlite[2/8] [========41%                 ] case01_profile.sqlite[2/8] [========42%                 ] case01_profile.sqlite[2/8] [=========43%                ] case01_profile.sqlite[2/8] [=========44%                ] case01_profile.sqlite[2/8] [=========45%                ] case01_profile.sqlite[2/8] [=========46%                ] case01_profile.sqlite[2/8] [==========47%               ] case01_profile.sqlite[2/8] [==========48%               ] case01_profile.sqlite[2/8] [==========49%               ] case01_profile.sqlite[2/8] [===========50%              ] case01_profile.sqlite[2/8] [===========51%              ] case01_profile.sqlite[2/8] [===========52%              ] case01_profile.sqlite[2/8] [===========53%              ] case01_profile.sqlite[2/8] [============54%             ] case01_profile.sqlite[2/8] [============55%             ] case01_profile.sqlite[2/8] [============56%             ] case01_profile.sqlite[2/8] [============57%             ] case01_profile.sqlite[2/8] [=============58%            ] case01_profile.sqlite[2/8] [=============59%            ] case01_profile.sqlite[2/8] [=============60%            ] case01_profile.sqlite[2/8] [==============61%           ] case01_profile.sqlite[2/8] [==============62%           ] case01_profile.sqlite[2/8] [==============63%           ] case01_profile.sqlite[2/8] [==============64%           ] case01_profile.sqlite[2/8] [===============65%          ] case01_profile.sqlite[2/8] [===============66%          ] case01_profile.sqlite[2/8] [===============67%          ] case01_profile.sqlite[2/8] [================68%         ] case01_profile.sqlite[2/8] [================69%         ] case01_profile.sqlite[2/8] [================70%         ] case01_profile.sqlite[2/8] [================71%         ] case01_profile.sqlite[2/8] [=================72%        ] case01_profile.sqlite[2/8] [=================73%        ] case01_profile.sqlite[2/8] [=================74%        ] case01_profile.sqlite[2/8] [==================75%       ] case01_profile.sqlite[2/8] [==================76%       ] case01_profile.sqlite[2/8] [==================77%       ] case01_profile.sqlite[2/8] [==================78%       ] case01_profile.sqlite[2/8] [===================79%      ] case01_profile.sqlite[2/8] [===================80%      ] case01_profile.sqlite[2/8] [===================81%      ] case01_profile.sqlite[2/8] [===================82%      ] case01_profile.sqlite[2/8] [====================83%     ] case01_profile.sqlite[2/8] [====================84%     ] case01_profile.sqlite[2/8] [====================85%     ] case01_profile.sqlite[2/8] [=====================86%    ] case01_profile.sqlite[2/8] [=====================87%    ] case01_profile.sqlite[2/8] [=====================88%    ] case01_profile.sqlite[2/8] [=====================89%    ] case01_profile.sqlite[2/8] [======================90%   ] case01_profile.sqlite[2/8] [======================91%   ] case01_profile.sqlite[2/8] [======================92%   ] case01_profile.sqlite[2/8] [=======================93%  ] case01_profile.sqlite[2/8] [=======================94%  ] case01_profile.sqlite[2/8] [=======================95%  ] case01_profile.sqlite[2/8] [=======================96%  ] case01_profile.sqlite[2/8] [========================97% ] case01_profile.sqlite[2/8] [========================98% ] case01_profile.sqlite[2/8] [========================99% ] case01_profile.sqlite[2/8] [========================100%] case01_profile.sqlite[2/8] [========================100%] case01_profile.sqlite
 SKIPPED: /home/p13922006/Parallelism/hw4/performance_reports/case01_profile.sqlite does not contain NV Tools Extension (NVTX) data.
 [3/8] Executing 'nvtx_sum' stats report
@@ -100,58 +10,60 @@ SKIPPED: /home/p13922006/Parallelism/hw4/performance_reports/case01_profile.sqli
 
  Time (%)  Total Time (ns)  Num Calls     Avg (ns)         Med (ns)        Min (ns)       Max (ns)       StdDev (ns)             Name         
  --------  ---------------  ---------  ---------------  ---------------  -------------  -------------  ---------------  ----------------------
-     33.8    4,283,564,640          4  1,070,891,160.0    117,752,161.5        478,837  4,047,581,480  1,985,230,110.4  sem_wait              
-     33.6    4,254,211,173         56     75,968,056.7    100,118,882.0          1,090    144,784,241     43,038,721.5  poll                  
-     31.5    4,000,062,200          1  4,000,062,200.0  4,000,062,200.0  4,000,062,200  4,000,062,200              0.0  sem_timedwait         
-      0.7       90,321,578        698        129,400.5         33,423.5          1,000     30,452,557      1,171,621.2  ioctl                 
-      0.1       14,142,892         44        321,429.4          3,823.5          1,517     11,017,034      1,698,662.2  fopen                 
-      0.1       13,580,286         65        208,927.5          4,881.0          2,537     13,014,050      1,613,233.9  fgetc                 
-      0.1        9,898,739          2      4,949,369.5      4,949,369.5          2,044      9,896,695      6,996,574.8  pthread_cond_broadcast
-      0.1        9,634,585          1      9,634,585.0      9,634,585.0      9,634,585      9,634,585              0.0  pthread_cond_wait     
-      0.0        1,537,168         41         37,491.9          5,542.0          4,247      1,130,885        175,359.3  mmap64                
-      0.0        1,104,026         14         78,859.0         43,255.0         25,818        286,521         86,468.8  write                 
-      0.0          883,842          5        176,768.4        108,692.0         84,308        478,662        169,109.3  pthread_create        
-      0.0          400,482         71          5,640.6          5,239.0          1,006         15,363          2,919.4  open64                
-      0.0          247,616         35          7,074.7          1,259.0          1,065        170,230         28,676.7  fclose                
-      0.0          104,291         14          7,449.4          3,570.0          1,509         37,452          9,337.9  mmap                  
-      0.0           55,051          1         55,051.0         55,051.0         55,051         55,051              0.0  fgets                 
-      0.0           31,519          7          4,502.7          4,690.0          1,184          6,457          1,798.2  open                  
-      0.0           13,954          3          4,651.3          4,943.0          3,486          5,525          1,050.3  pipe2                 
-      0.0           11,927          4          2,981.8          3,206.0          1,581          3,934          1,098.0  munmap                
-      0.0           11,420          2          5,710.0          5,710.0          3,555          7,865          3,047.6  socket                
-      0.0            9,883          6          1,647.2          1,296.0          1,054          2,592            715.5  read                  
-      0.0            9,777          1          9,777.0          9,777.0          9,777          9,777              0.0  connect               
-      0.0            3,945          2          1,972.5          1,972.5          1,402          2,543            806.8  fwrite                
-      0.0            3,324          3          1,108.0          1,077.0          1,036          1,211             91.5  fcntl                 
-      0.0            1,653          1          1,653.0          1,653.0          1,653          1,653              0.0  bind                  
+     34.4    4,504,727,895          4  1,126,181,973.8    114,626,602.5        407,872  4,275,066,818  2,099,960,595.9  sem_wait              
+     34.0    4,456,452,684         58     76,835,391.1    100,121,303.0          1,956    151,009,419     42,760,396.2  poll                  
+     30.6    4,000,057,471          1  4,000,057,471.0  4,000,057,471.0  4,000,057,471  4,000,057,471              0.0  sem_timedwait         
+      0.6       80,769,206        705        114,566.2         35,076.0          1,145     31,975,998      1,215,415.9  ioctl                 
+      0.1       15,070,302         44        342,506.9          3,691.5          1,449     13,266,667      2,004,330.4  fopen                 
+      0.1       12,690,611          1     12,690,611.0     12,690,611.0     12,690,611     12,690,611              0.0  pthread_cond_wait     
+      0.1        8,904,431          1      8,904,431.0      8,904,431.0      8,904,431      8,904,431              0.0  pthread_cond_broadcast
+      0.0        2,446,853         15        163,123.5         45,361.0          1,602        961,330        289,905.6  write                 
+      0.0        2,343,092         35         66,945.5          1,346.0          1,050      2,262,957        382,131.7  fclose                
+      0.0        2,147,683         41         52,382.5          5,749.0          4,086      1,737,972        270,039.9  mmap64                
+      0.0        1,319,356          5        263,871.2        115,900.0         96,916        512,745        212,302.3  pthread_create        
+      0.0          558,631         64          8,728.6          4,032.0          2,583        175,386         24,107.2  fgetc                 
+      0.0          407,624         68          5,994.5          5,325.0          1,013         19,049          3,199.6  open64                
+      0.0          100,397         14          7,171.2          3,344.5          1,536         35,175          8,935.2  mmap                  
+      0.0           58,070          1         58,070.0         58,070.0         58,070         58,070              0.0  fgets                 
+      0.0           31,240          7          4,462.9          5,135.0          1,197          6,460          1,919.9  open                  
+      0.0           17,703          2          8,851.5          8,851.5          6,328         11,375          3,568.8  socket                
+      0.0           12,143          3          4,047.7          4,701.0          2,033          5,409          1,780.3  pipe2                 
+      0.0           10,836          8          1,354.5          1,266.0          1,015          1,758            261.3  fcntl                 
+      0.0           10,708          1         10,708.0         10,708.0         10,708         10,708              0.0  connect               
+      0.0           10,086          5          2,017.2          1,270.0          1,021          3,408          1,221.6  read                  
+      0.0            9,264          3          3,088.0          3,188.0          2,810          3,266            243.9  munmap                
+      0.0            3,691          2          1,845.5          1,845.5          1,565          2,126            396.7  fwrite                
+      0.0            3,391          1          3,391.0          3,391.0          3,391          3,391              0.0  bind                  
+      0.0            1,180          1          1,180.0          1,180.0          1,180          1,180              0.0  listen                
+      0.0            1,070          1          1,070.0          1,070.0          1,070          1,070              0.0  fputc                 
 
 [5/8] Executing 'cuda_api_sum' stats report
 
  Time (%)  Total Time (ns)  Num Calls    Avg (ns)       Med (ns)    Min (ns)    Max (ns)      StdDev (ns)             Name           
  --------  ---------------  ---------  -------------  ------------  --------  -------------  -------------  -------------------------
-     97.1    4,045,369,681          8  505,671,210.1  16,228,355.0     4,126  2,183,308,781  803,207,843.1  cudaMemcpyAsync          
-      2.8      117,482,514          8   14,685,314.3       2,921.5     2,271    117,459,378   41,526,992.8  cudaMalloc               
-      0.0          452,352          8       56,544.0       7,361.5     5,288        350,106      119,292.3  cudaMemcpyToSymbol       
-      0.0          350,747          8       43,843.4       3,676.5     2,728        301,792      104,579.9  cudaFree                 
-      0.0          226,196          4       56,549.0      27,623.0     7,023        163,927       72,243.3  cudaLaunchKernel         
-      0.0           92,394          4       23,098.5       4,487.0     2,734         80,686       38,418.5  cudaStreamDestroy        
-      0.0           60,594          4       15,148.5       4,178.5     3,057         49,180       22,705.9  cudaMemcpy               
-      0.0           53,642          4       13,410.5       4,120.0     2,572         42,830       19,640.2  cudaStreamCreateWithFlags
-      0.0           42,902          4       10,725.5       8,033.0     3,190         23,646        8,918.3  cudaStreamSynchronize    
-      0.0            1,325          1        1,325.0       1,325.0     1,325          1,325            0.0  cuModuleGetLoadingMode   
+     97.2    4,243,674,197          8  530,459,274.6  16,699,678.0     5,435  2,299,043,674  845,266,517.8  cudaMemcpyAsync          
+      2.4      106,327,375          8   13,290,921.9      99,395.5     5,034    105,691,946   37,335,782.6  cudaMalloc               
+      0.3       12,626,921          4    3,156,730.3      69,906.5    16,345     12,470,763    6,209,408.3  cudaStreamDestroy        
+      0.1        4,632,555          8      579,069.4     121,846.0    17,888      3,716,500    1,274,187.2  cudaFree                 
+      0.0          411,441          8       51,430.1       9,272.0     6,982        344,236      118,335.7  cudaMemcpyToSymbol       
+      0.0          232,116          4       58,029.0      23,276.5    21,797        163,766       70,495.7  cudaLaunchKernel         
+      0.0          118,719          4       29,679.8      25,727.5    22,026         45,238       10,633.0  cudaMemcpy               
+      0.0           81,733          4       20,433.3      15,765.0     9,743         40,460       14,016.7  cudaStreamCreateWithFlags
+      0.0           42,099          4       10,524.8       7,736.5     5,084         21,542        7,452.5  cudaStreamSynchronize    
+      0.0            1,592          1        1,592.0       1,592.0     1,592          1,592            0.0  cuModuleGetLoadingMode   
 
 [6/8] Executing 'cuda_gpu_kern_sum' stats report
 
  Time (%)  Total Time (ns)  Instances     Avg (ns)        Med (ns)      Min (ns)     Max (ns)      StdDev (ns)                                 Name                              
  --------  ---------------  ---------  ---------------  -------------  ----------  -------------  -------------  ----------------------------------------------------------------
-    100.0    4,045,247,554          4  1,011,311,888.5  914,764,090.5  32,439,493  2,183,279,880  907,448,779.2  mine_bitcoin_kernel(unsigned char *, DeviceWork *, unsigned int)
+    100.0    4,243,537,201          4  1,060,884,300.3  955,578,805.5  33,364,982  2,299,014,608  957,476,565.0  mine_bitcoin_kernel(unsigned char *, DeviceWork *, unsigned int)
 
 [7/8] Executing 'cuda_gpu_mem_time_sum' stats report
 
  Time (%)  Total Time (ns)  Count  Avg (ns)  Med (ns)  Min (ns)  Max (ns)  StdDev (ns)           Operation          
  --------  ---------------  -----  --------  --------  --------  --------  -----------  ----------------------------
-     70.4           16,256     16   1,016.0     960.0       928     1,472        137.0  [CUDA memcpy Host-to-Device]
-     29.6            6,848      4   1,712.0   1,648.0     1,440     2,112        291.5  [CUDA memcpy Device-to-Host]
+     70.4           18,496     16   1,156.0   1,056.0     1,024     1,472        188.7  [CUDA memcpy Host-to-Device]
+     29.6            7,776      4   1,944.0   1,808.0     1,760     2,400        307.3  [CUDA memcpy Device-to-Host]
 
 [8/8] Executing 'cuda_gpu_mem_size_sum' stats report
 

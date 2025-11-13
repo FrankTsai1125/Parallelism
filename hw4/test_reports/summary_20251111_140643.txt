@@ -1,5 +1,0 @@
-Functional Test Summary - Tue Nov 11 14:06:46 CST 2025
-Case case00: PASS (8.780s)
-Case case01: PASS (9.851s)
-Case case02: PASS (5.611s)
-Case case03: PASS (5.256s)

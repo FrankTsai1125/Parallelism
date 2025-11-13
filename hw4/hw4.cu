@@ -3,12 +3,6 @@
 // Modified from sequential version for GPU acceleration
 //***********************************************************************************
 
-#include <iostream>
-#include <fstream>
-#include <string>
-#include <chrono>
-#include <thread>
-
 #include <cstdio>
 #include <cstring>
 
@@ -71,25 +65,6 @@ void convert_string_to_little_endian_bytes(unsigned char* out, char *in, size_t 
     for(s = 0, b = string_len/2-1; s < string_len; s+=2, --b)
     {
         out[b] = (unsigned char)(decode(in[s])<<4) + decode(in[s+1]);
-    }
-}
-
-// print out binary array (from highest value) in the hex format
-void print_hex(unsigned char* hex, size_t len)
-{
-    for(int i=0;i<len;++i)
-    {
-        printf("%02x", hex[i]);
-    }
-}
-
-
-// print out binar array (from lowest value) in the hex format
-void print_hex_inverse(unsigned char* hex, size_t len)
-{
-    for(int i=len-1;i>=0;--i)
-    {
-        printf("%02x", hex[i]);
     }
 }
 
@@ -608,7 +583,6 @@ bool mine_block_with_context(HashBlock &block,
 
     cudaError_t err = cudaStreamSynchronize(ctx.stream);
     if (err != cudaSuccess) {
-        printf("CUDA error during synchronize: %s\n", cudaGetErrorString(err));
         block.nonce = 0;
         return false;
     }
@@ -625,8 +599,6 @@ bool mine_block_with_context(HashBlock &block,
 
 void solve(FILE *fin, FILE *fout)
 {
-
-    // **** read data *****
     char version[9];
     char prevhash[65];
     char ntime[9];
@@ -640,78 +612,42 @@ void solve(FILE *fin, FILE *fout)
     getline(ntime, 9, fin);
     getline(nbits, 9, fin);
     fscanf(fin, "%d\n", &tx);
-    printf("start hashing\n");
 
-    raw_merkle_branch = new char [tx * 65];
+    raw_merkle_branch = new char [static_cast<size_t>(tx) * 65];
     merkle_branch = new char *[tx];
     for(int i=0;i<tx;++i)
     {
-        merkle_branch[i] = raw_merkle_branch + i * 65;
+        merkle_branch[i] = raw_merkle_branch + static_cast<size_t>(i) * 65;
         getline(merkle_branch[i], 65, fin);
         merkle_branch[i][64] = '\0';
     }
 
-    // **** calculate merkle root **** (on CPU)
-
     unsigned char merkle_root[32];
     calc_merkle_root(merkle_root, tx, merkle_branch);
 
-    printf("merkle root(little): ");
-    print_hex(merkle_root, 32);
-    printf("\n");
-
-    printf("merkle root(big):    ");
-    print_hex_inverse(merkle_root, 32);
-    printf("\n");
-
-
-    // **** solve block ****
-    printf("Block info (big): \n");
-    printf("  version:  %s\n", version);
-    printf("  pervhash: %s\n", prevhash);
-    printf("  merkleroot: "); print_hex_inverse(merkle_root, 32); printf("\n");
-    printf("  nbits:    %s\n", nbits);
-    printf("  ntime:    %s\n", ntime);
-    printf("  nonce:    ???\n\n");
-
     HashBlock block;
-
-    // convert to byte array in little-endian
     convert_string_to_little_endian_bytes((unsigned char *)&block.version, version, 8);
     convert_string_to_little_endian_bytes(block.prevhash,                  prevhash,    64);
     memcpy(block.merkle_root, merkle_root, 32);
     convert_string_to_little_endian_bytes((unsigned char *)&block.nbits,   nbits,     8);
     convert_string_to_little_endian_bytes((unsigned char *)&block.ntime,   ntime,     8);
     block.nonce = 0;
-    
-    
-    // ********** calculate target value *********
-    // calculate target value from encoded difficulty which is encoded on "nbits"
+
     unsigned int exp = block.nbits >> 24;
     unsigned int mant = block.nbits & 0xffffff;
     unsigned char target_hex[32] = {};
-    
+
     unsigned int shift = 8 * (exp - 3);
     unsigned int sb = shift / 8;
     unsigned int rb = shift % 8;
-    
-    // little-endian
-    target_hex[sb    ] = (mant << rb);
-    target_hex[sb + 1] = (mant >> (8-rb));
-    target_hex[sb + 2] = (mant >> (16-rb));
-    target_hex[sb + 3] = (mant >> (24-rb));
-    
-    
-    printf("Target value (big): ");
-    print_hex_inverse(target_hex, 32);
-    printf("\n");
+
+    target_hex[sb    ] = static_cast<unsigned char>(mant << rb);
+    target_hex[sb + 1] = static_cast<unsigned char>(mant >> (8-rb));
+    target_hex[sb + 2] = static_cast<unsigned char>(mant >> (16-rb));
+    target_hex[sb + 3] = static_cast<unsigned char>(mant >> (24-rb));
 
     int threads_per_block = 256;
     int blocks_per_grid = 2048;
-    printf("Mining with CUDA: %d blocks x %d threads = %d parallel threads\n", 
-           blocks_per_grid, threads_per_block, blocks_per_grid * threads_per_block);
-    printf("Block structure size: %lu bytes\n", sizeof(HashBlock));
-    printf("Searching nonce range: 0x00000000 to 0xffffffff (adaptive chunks)\n");
 
     MiningContext ctx;
     init_mining_context(ctx, target_hex);
@@ -719,51 +655,18 @@ void solve(FILE *fin, FILE *fout)
     bool solved = mine_block_with_context(
         block,
         ctx,
-        65536ULL,          // batch size for persistent work
+        65536ULL,
         65536ULL,
         blocks_per_grid,
         threads_per_block);
 
-    printf("Search completed.\n");
-
-    unsigned int result_nonce = block.nonce;
-
-    if (solved && result_nonce != 0xFFFFFFFFu) {
-        printf("Solution found: nonce = 0x%08x\n", result_nonce);
-    }
-
-    // Always compute hash for output (even if no solution found)
     SHA256 sha256_ctx;
     double_sha256(&sha256_ctx, (unsigned char*)&block, 80);
 
-    if(solved && little_endian_bit_comparison(sha256_ctx.b, target_hex, 32) < 0)
+    if(!(solved && little_endian_bit_comparison(sha256_ctx.b, target_hex, 32) < 0))
     {
-        printf("Found Solution!!\n");
-        printf("hash #%10u (big): ", block.nonce);
-        print_hex_inverse(sha256_ctx.b, 32);
-        printf("\n\n");
-    }
-    else if (solved)
-    {
-        printf("Warning: GPU result verification failed!\n");
-    }
-    else
-    {
-        printf("No solution found in search space!\n");
         block.nonce = 0;
     }
-
-    // print result
-
-    //little-endian
-    printf("hash(little): ");
-    print_hex(sha256_ctx.b, 32);
-    printf("\n");
-
-    //big-endian
-    printf("hash(big):    ");
-    print_hex_inverse(sha256_ctx.b, 32);
-    printf("\n\n");
 
     for(int i=0;i<4;++i)
     {
@@ -777,199 +680,34 @@ void solve(FILE *fin, FILE *fout)
     delete[] raw_merkle_branch;
 }
 
-// Structure to hold block data for parallel processing
-struct BlockData {
-    char version[9];
-    char prevhash[65];
-    char ntime[9];
-    char nbits[9];
-    int tx;
-    char **merkle_branch;
-    char *raw_merkle_branch;
-    unsigned char merkle_root[32];
-    HashBlock block;
-    unsigned char target_hex[32];
-    unsigned int result_nonce;
-    bool found;
-};
-
-// Initialize stream data (called once per stream)
-void init_stream_data(unsigned char *d_target, unsigned int *d_result_nonce, 
-                     int *d_found, unsigned char *target_hex, cudaStream_t stream)
-{
-    unsigned int init_nonce = 0xFFFFFFFF;
-    cudaMemcpyAsync(d_target, target_hex, 32, cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(d_result_nonce, &init_nonce, sizeof(unsigned int), cudaMemcpyHostToDevice, stream);
-    cudaMemsetAsync(d_found, 0, sizeof(int), stream);
-}
-
 int main(int argc, char **argv)
 {
     if (argc != 3) {
         fprintf(stderr, "usage: hw4 <in> <out>\n");
         return 1;
     }
+
     FILE *fin = fopen(argv[1], "r");
     FILE *fout = fopen(argv[2], "w");
-
     if (!fin || !fout) {
         fprintf(stderr, "Error opening files\n");
+        if (fin) fclose(fin);
+        if (fout) fclose(fout);
         return 1;
     }
 
     int totalblock;
-    fscanf(fin, "%d\n", &totalblock);
+    if (fscanf(fin, "%d\n", &totalblock) != 1 || totalblock < 0) {
+        fclose(fin);
+        fclose(fout);
+        return 1;
+    }
     fprintf(fout, "%d\n", totalblock);
 
-    printf("Total blocks to mine: %d\n", totalblock);
-    
-    // If only 1 block, use original sequential method
-    if (totalblock == 1) {
-        printf("\n========== Solving Block 1/1 (Sequential) ==========\n");
+    for (int i = 0; i < totalblock; ++i) {
         solve(fin, fout);
-    } else {
-        // Multiple blocks: use parallel streams
-        printf("\n========== Using Parallel Streams for %d blocks ==========\n", totalblock);
-        
-        // Allocate array of BlockData
-        BlockData *blocks = new BlockData[totalblock];
-        
-        // Read all block data first
-        for (int i = 0; i < totalblock; ++i) {
-            printf("\n========== Reading Block %d/%d ==========\n", i+1, totalblock);
-            
-            getline(blocks[i].version, 9, fin);
-            getline(blocks[i].prevhash, 65, fin);
-            getline(blocks[i].ntime, 9, fin);
-            getline(blocks[i].nbits, 9, fin);
-            fscanf(fin, "%d\n", &blocks[i].tx);
-            
-            printf("start hashing\n");
-            
-            blocks[i].raw_merkle_branch = new char[blocks[i].tx * 65];
-            blocks[i].merkle_branch = new char*[blocks[i].tx];
-            for (int j = 0; j < blocks[i].tx; ++j) {
-                blocks[i].merkle_branch[j] = blocks[i].raw_merkle_branch + j * 65;
-                getline(blocks[i].merkle_branch[j], 65, fin);
-                blocks[i].merkle_branch[j][64] = '\0';
-            }
-            
-            // Calculate merkle root
-            calc_merkle_root(blocks[i].merkle_root, blocks[i].tx, blocks[i].merkle_branch);
-            
-            printf("merkle root(little): ");
-            print_hex(blocks[i].merkle_root, 32);
-            printf("\n");
-            printf("merkle root(big):    ");
-            print_hex_inverse(blocks[i].merkle_root, 32);
-            printf("\n");
-            
-            // Print block info
-            printf("Block info (big): \n");
-            printf("  version:  %s\n", blocks[i].version);
-            printf("  pervhash: %s\n", blocks[i].prevhash);
-            printf("  merkleroot: "); print_hex_inverse(blocks[i].merkle_root, 32); printf("\n");
-            printf("  nbits:    %s\n", blocks[i].nbits);
-            printf("  ntime:    %s\n", blocks[i].ntime);
-            printf("  nonce:    ???\n");
-            
-            // Prepare block structure
-            convert_string_to_little_endian_bytes((unsigned char *)&blocks[i].block.version, blocks[i].version, 8);
-            convert_string_to_little_endian_bytes(blocks[i].block.prevhash, blocks[i].prevhash, 64);
-            memcpy(blocks[i].block.merkle_root, blocks[i].merkle_root, 32);
-            convert_string_to_little_endian_bytes((unsigned char *)&blocks[i].block.nbits, blocks[i].nbits, 8);
-            convert_string_to_little_endian_bytes((unsigned char *)&blocks[i].block.ntime, blocks[i].ntime, 8);
-            blocks[i].block.nonce = 0;
-            
-            // Calculate target
-            unsigned int exp = blocks[i].block.nbits >> 24;
-            unsigned int mant = blocks[i].block.nbits & 0xffffff;
-            memset(blocks[i].target_hex, 0, 32);
-            
-            unsigned int shift = 8 * (exp - 3);
-            unsigned int sb = shift / 8;
-            unsigned int rb = shift % 8;
-            
-            blocks[i].target_hex[sb] = (mant << rb);
-            blocks[i].target_hex[sb + 1] = (mant >> (8 - rb));
-            blocks[i].target_hex[sb + 2] = (mant >> (16 - rb));
-            blocks[i].target_hex[sb + 3] = (mant >> (24 - rb));
-            
-            printf("Target value (big): ");
-            print_hex_inverse(blocks[i].target_hex, 32);
-            printf("\n");
-        }
-        
-        printf("\n========== Starting Parallel Mining on %d Blocks (sequential processing) =========="
-               "\n\n", totalblock);
-        
-        int threads_per_block = 256;
-        int blocks_per_grid = 2048;
-        MiningContext *contexts = new MiningContext[totalblock];
-        for (int i = 0; i < totalblock; ++i) {
-            init_mining_context(contexts[i], blocks[i].target_hex);
-        }
-        
-        for (int i = 0; i < totalblock; ++i) {
-            printf("\n========== Solving Block %d/%d =========="
-                   "\n", i+1, totalblock);
-            
-            bool solved = mine_block_with_context(
-                blocks[i].block,
-                contexts[i],
-                65536ULL,
-                65536ULL,
-                blocks_per_grid,
-                threads_per_block);
-            blocks[i].found = solved;
-            if (solved) {
-                blocks[i].result_nonce = blocks[i].block.nonce;
-                printf("Solution found: nonce = 0x%08x\n", blocks[i].result_nonce);
-            } else {
-                blocks[i].result_nonce = 0;
-                printf("No solution found for this block.\n");
-            }
-            
-            SHA256 sha256_ctx;
-            double_sha256(&sha256_ctx, (unsigned char*)&blocks[i].block, 80);
-            printf("hash(little): ");
-            print_hex(sha256_ctx.b, 32);
-            printf("\n");
-            printf("hash(big):    ");
-            print_hex_inverse(sha256_ctx.b, 32);
-            printf("\n");
-        }
-        
-        // Write out results
-        for (int i = 0; i < totalblock; ++i) {
-            if (blocks[i].found) {
-                printf("\n========== Block %d/%d Results =========="
-                       "\n", i+1, totalblock);
-                printf("hash #%10u (big): ", blocks[i].block.nonce);
-                SHA256 sha256_ctx;
-                double_sha256(&sha256_ctx, (unsigned char*)&blocks[i].block, 80);
-                print_hex_inverse(sha256_ctx.b, 32);
-                printf("\n");
-            } else {
-                printf("\n========== Block %d/%d Results =========="
-                       "\n", i+1, totalblock);
-                printf("No valid nonce found for this block.\n");
-            }
-            for (int j = 0; j < 4; ++j) {
-                fprintf(fout, "%02x", ((unsigned char*)&blocks[i].block.nonce)[j]);
-            }
-            fprintf(fout, "\n");
-        }
-        
-        for (int i = 0; i < totalblock; ++i) {
-            destroy_mining_context(contexts[i]);
-            delete[] blocks[i].merkle_branch;
-            delete[] blocks[i].raw_merkle_branch;
-        }
-        delete[] contexts;
-        delete[] blocks;
     }
-    
+
     fclose(fin);
     fclose(fout);
     return 0;
