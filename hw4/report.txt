@@ -1,54 +1,666 @@
-# GPU Persistent-Kernel Optimization Plan
+================================================================================
+Bitcoin Miner 优化报告 - 方案 A+B 实施计划
+================================================================================
+学号：p13922006
+目标：将 case01 性能从 4.20s 优化到 2.0-2.5s
 
-## Current Issues Observed
-- Recent persistent-kernel prototype regressed performance (case01 ~20 s vs 9 s baseline).
-- Nsight shows the kernel now runs the full 2^32 nonce space each launch, losing the early-exit benefit.
-- Host busy-wait loop (poll + nanosleep + sem_wait) consumes >30% of runtime.
-- Multi-block run still launches kernels sequentially; each block now costs ~3 s, so case01 totals ~12 s just in GPU time.
+================================================================================
+一、深度分析总结（10 分钟思考后）
+================================================================================
 
-## Goal
-Transform the miner into a truly persistent kernel that:
-1. Uses device-side atomic work queues (small batches) to reduce wasted work once a solution is found.
-2. Allows a single persistent kernel to serve multiple block headers concurrently.
+### 当前性能瓶颈
 
-## Step-by-Step Optimization Plan
+经过详细的 nsys profiling 和多次实验，确认了以下事实：
 
-### Step 0: Restore Baseline
-- Revert to the previous chunk-based implementation (case00/01/02/03 ≈ 7/9/5/5 s) to fix a reference point.
-- Verify via `make`, `./run_all.sh`, `./run_performance.sh`; keep reports for comparison.
+1. **GPU Kernel 本身已经很快** (10.3 ms/kernel)
+   - 512 blocks × 256 threads 配置接近最优
+   - 16M chunk_size 在 launch overhead 和 overlap 之间达到平衡
 
-### Step 1: Device Work Structure (single block)
-- Define `struct DeviceWork { uint64_t next_nonce; uint64_t end_nonce; int found; uint32_t result; }` in device-visible memory.
-- Initialize it once on host (pinned or managed memory). Threads iterate in batches (e.g. 4K–8K nonces), updating `next_nonce` via `atomicAdd`.
-- Kernel becomes a loop: fetch-batch → hash → check `found` → repeat, rather than separate launches per chunk.
+2. **真正的瓶颈是架构性的** (不是参数性的)
+   - 当前架构是"反应式"：Wait → Check → Launch
+   - 每个 stream 同时只有 1 个 kernel 运行
+   - Overlap 效率只有 6.1%，这是当前架构的极限
 
-### Step 2: Non-blocking host polling (single block)
-- Use `cudaStreamQuery` / `cudaEventQuery` combined with host-pinned `found` flag; sync only when the kernel finishes or when `found` toggles.
-- Confirm timings remain comparable to the baseline after replacing chunk launches with batched persistent work.
+3. **实验证明的事实**
+   - 减少 blocks_per_grid 到 256：单 kernel 慢 19%，总时间更慢
+   - 增加 chunk_size 到 64M：launch 减少 75%，但 overlap 下降 4.6%，总时间不变
+   - 调整 usleep、消除重复 query：CPU 效率提升，但墙上时间改善微小
 
-### Step 3: Multi-work queue (host-managed)
-- Maintain an array of `DeviceWork` (one per block) on host. Still launch the kernel sequentially per block, but reuse the new work/batch infrastructure.
-- Ensures infrastructure works for multiple blocks without introducing concurrency yet.
+### 要达到 3.0-3.5s 需要什么？
 
-### Step 4: Device-side task queue (shared persistent kernel)
-- Move `DeviceWork` array to device memory and add `__device__ int global_task_idx`.
-- Launch a single persistent kernel; each thread block grabs the next task via `atomicAdd(global_task_idx)` and processes it in batches.
-- When all tasks are consumed, the kernel exits; blocks that find a nonce update their `DeviceWork` record.
+**数学分析：**
+- 当前 GPU 总时间：4,485 ms
+- 当前墙上时间：4,210 ms
+- 通过并行节省：275 ms (6.1%)
+- 要达到 3,500 ms：需要节省 985 ms
+- **需要 3.6× 的并行提升！**
 
-### Step 5: Result reporting & sync
-- Each `DeviceWork` should have host-pinned result buffers; after kernel completion, host reads them directly (one `cudaDeviceSynchronize` total).
-- Re-run case01 to ensure all four blocks now run within the same kernel and share work efficiently (target: 2–3 s total).
+**结论：** 必须进行架构级别的改变
 
-### Step 6: Cleanup & tuning
-- Merge midstate/target setup into unified device buffers; remove legacy chunk-only code.
-- Expose batch size / launch parameters for tuning (e.g. start with 4096, adjust to balance early exit and efficiency).
-- Expand to multi-GPU if needed or adjust `cudaOccupancyMaxPotentialBlockSize` for best utilization.
+================================================================================
+二、方案 A+B 总体策略
+================================================================================
 
-### Validation Checklist for Each Step
-1. `make`
-2. `./run_all.sh`
-3. `./run_performance.sh`
-4. Compare against previous step & baseline (capture Nsight, `/usr/bin/time`)
-5. Run `hw4-judge` after significant milestones (avoid cooldown penalties)
+### 方案 A：Prefetch Pipeline（Overlap 优化）
+**核心思想：** "滑动窗口"prefetch，而不是简单的预先 launch 所有
 
-Following these steps keeps the program functional at each stage while incrementally evolving toward a shared persistent-kernel design that minimizes wasted work and allows concurrent processing of multiple block headers.
+**架构改变：**
+```
+当前（反应式）：
+Stream 0: [K0] wait → [K1] wait → [K2] wait...
+                ↑ 串行等待
+
+优化后（主动式）：
+Stream 0: [K0 running] [K1 queued] [K2 queued] [K3 queued]
+          ↑ 同时有多个 kernels 在 CUDA queue 中
+```
+
+**关键特性：**
+1. 保持 2-8 个 kernels 在每个 stream 的 queue 中
+2. 动态调整 prefetch 窗口大小
+3. 保留 early exit 能力（通过 d_found 让 queued kernels 快速退出）
+4. 浪费计算 < 5%
+
+**预期效果：**
+- Overlap 效率：6% → 50-60%
+- 节省时间：~1,400 ms
+
+---
+
+### 方案 B：SHA-256 Kernel 优化（Throughput 优化）
+**核心思想：** 算法级优化，避免汇编级调优的高风险
+
+**优化点：**
+1. **减少 shared memory 加载延迟**
+   - 让更多 threads 参与加载
+   - 减少 bank conflicts
+
+2. **使用硬件加速指令**
+   - `__byte_perm` 替代手动位操作
+   - 字节序转换加速
+
+3. **减少 register 使用**
+   - 复用 chunk1 数组存储 intermediate
+   - 从 56 registers → 24 registers
+   - 提升 occupancy
+
+4. **优化 early exit 检查**
+   - 动态调整检查频率
+   - 减少 atomic read 次数
+
+**预期效果：**
+- Kernel 加速：10-15%
+- GPU 总时间：4,485 ms → 3,800-4,000 ms
+- 节省时间：~485-685 ms
+
+---
+
+### A+B 协同效应
+- 更快的 kernel (B) 让 prefetch (A) 更有效
+- 更好的 overlap (A) 让 kernel 优化 (B) 的收益更明显
+- **总预期：节省 2,300 ms，最终 1,900-2,200 ms** ✓✓✓
+
+================================================================================
+三、详细实施步骤
+================================================================================
+
+## 阶段 1：方案 B - Kernel 优化（先做，风险低）
+
+### B.1 优化 shared memory 加载
+**位置：** mine_kernel_global, 第 476-486 行
+
+**修改前：**
+```cuda
+if (threadIdx.x < 8) {
+    s_midstate[threadIdx.x] = midstate[threadIdx.x];
+}
+if (threadIdx.x < 16) {
+    s_chunk1_base[threadIdx.x] = chunk1_base[threadIdx.x];
+}
+__syncthreads();
+```
+
+**修改后：**
+```cuda
+// 让前 8 个 threads 同时加载 midstate 和 chunk1_base
+if (threadIdx.x < 8) {
+    s_midstate[threadIdx.x] = midstate[threadIdx.x];
+    s_chunk1_base[threadIdx.x] = chunk1_base[threadIdx.x];
+    s_chunk1_base[threadIdx.x + 8] = chunk1_base[threadIdx.x + 8];
+}
+__syncthreads();
+```
+
+**原理：** 减少加载轮次，提升 memory bandwidth 利用率
+**预期：** 1-2% kernel 加速
+
+---
+
+### B.2 使用硬件字节序转换
+**位置：** mine_kernel_global, 第 512-515 行
+
+**修改前：**
+```cuda
+chunk1[3] = ((nonce & 0x000000FFu) << 24) |
+            ((nonce & 0x0000FF00u) << 8)  |
+            ((nonce & 0x00FF0000u) >> 8)  |
+            ((nonce & 0xFF000000u) >> 24);
+```
+
+**修改后：**
+```cuda
+chunk1[3] = __byte_perm(nonce, 0, 0x0123);
+```
+
+**原理：** 使用 GPU 硬件的字节重排指令，1 条指令完成
+**预期：** 0.5-1% kernel 加速
+
+---
+
+### B.3 减少 register 使用（最重要的优化）
+**位置：** mine_kernel_global, 第 500-530 行
+
+**修改前：**
+```cuda
+WORD state[8];           // 8 registers
+WORD chunk1[16];         // 16 registers
+unsigned char intermediate[32];  // 32 registers
+// 总计：56 registers
+
+// 第一次 hash
+device_sha256_transform_words(state, chunk1);
+
+// 转换为 bytes
+for (int j = 0; j < 8; ++j) {
+    WORD val = state[j];
+    intermediate[4*j + 0] = (val >> 24) & 0xff;
+    intermediate[4*j + 1] = (val >> 16) & 0xff;
+    intermediate[4*j + 2] = (val >> 8) & 0xff;
+    intermediate[4*j + 3] = val & 0xff;
+}
+
+// 第二次 hash
+SHA256 hash;
+device_sha256(&hash, intermediate, 32);
+```
+
+**修改后：**
+```cuda
+WORD state[8];    // 8 registers
+WORD chunk1[16];  // 16 registers
+// 总计：24 registers (-32 registers!)
+
+// 第一次 hash
+device_sha256_transform_words(state, chunk1);
+
+// 复用 chunk1[0-7] 存储 intermediate (以 big-endian 格式)
+#pragma unroll
+for (int j = 0; j < 8; ++j) {
+    chunk1[j] = state[j];  // 保持大端序
+}
+
+// 第二次 hash (直接从 chunk1 读取，作为 unsigned char*)
+SHA256 hash;
+device_sha256(&hash, (unsigned char*)chunk1, 32);
+```
+
+**原理：**
+- 减少 32 个 register 使用
+- Occupancy 提升：可能从 50% → 75%
+- 更多 warps 可以同时运行
+
+**预期：** 5-8% kernel 加速 ⭐⭐⭐
+
+---
+
+### B.4 优化 early exit 检查频率
+**位置：** mine_kernel_global, 第 492-495 行
+
+**修改前：**
+```cuda
+if ((i & 0x1F) == 0 && *found) {
+    return;
+}
+```
+
+**修改后：**
+```cuda
+// 前期少检查（减少 atomic read），后期多检查（快速退出）
+unsigned int check_mask = (i < nonce_count/2) ? 0x7F : 0x1F;
+if ((i & check_mask) == 0 && *found) {
+    return;
+}
+```
+
+**原理：** 动态平衡检查开销和退出速度
+**预期：** 1-2% kernel 加速
+
+---
+
+### B.5 测试方案 B
+
+**测试步骤：**
+1. 实施 B.1-B.4 所有优化
+2. 编译：`make`
+3. 正确性测试：`./hw4 testcases/case01.in outputs/case01_b.out`
+4. 性能测试：`/usr/bin/time -v ./hw4 testcases/case01.in outputs/case01_b.out`
+5. Profile：`nsys profile --stats=true ./hw4 testcases/case01.in outputs/case01_b.out`
+
+**预期结果：**
+- ✅ 所有测试通过
+- ✅ case01: 4.20s → 3.6-3.8s
+- ✅ Kernel 时间：10.3ms → 8.8-9.3ms
+
+---
+
+## 阶段 2：方案 A - Prefetch Pipeline（难度高，潜力大）
+
+### A.1 新增数据结构
+**位置：** 第 604 行后（BlockTask 结构后）
+
+**新增：**
+```cpp
+// Prefetch context for sliding window pipeline
+struct PrefetchContext {
+    cudaStream_t stream;
+    std::vector<cudaEvent_t> events;  // One event per chunk
+    
+    // Device memory (shared across chunks)
+    unsigned char *d_target;
+    WORD *d_midstate;
+    WORD *d_chunk1_base;
+    int *d_found;              // Shared found flag
+    unsigned int *d_result;    // Shared result nonce
+    
+    // Host memory
+    int h_found;
+    unsigned int h_result_nonce;
+    
+    // State tracking
+    int block_idx;             // Which block this stream is processing
+    int chunks_launched;       // How many chunks have been launched
+    int chunks_completed;      // How many chunks have completed
+    int prefetch_window;       // Current prefetch window size (2-8)
+    bool block_found;          // Whether this block found a nonce
+    
+    // Performance tracking
+    float last_kernel_time;    // For dynamic window adjustment
+};
+```
+
+---
+
+### A.2 修改 mine_kernel_global 添加快速退出
+**位置：** 第 466 行，mine_kernel_global 函数开头
+
+**修改：** 在函数最开始添加：
+```cuda
+__global__ void mine_kernel_global(
+    unsigned char *target,
+    WORD *midstate,
+    WORD *chunk1_base,
+    unsigned int start_nonce,
+    unsigned int nonce_count,
+    int *found,
+    unsigned int *result_nonce
+)
+{
+    // 【新增】First check: if already found, exit immediately
+    if (*found) return;
+    
+    __shared__ WORD s_midstate[8];
+    __shared__ WORD s_chunk1_base[16];
+    
+    // ... 其余代码不变 ...
+}
+```
+
+**原理：** 让 prefetch 的 kernels 能快速退出
+
+---
+
+### A.3 重写 mine_blocks_pipeline（核心修改）
+**位置：** 第 625-787 行，完全重写
+
+**新架构：**
+```cpp
+bool mine_blocks_pipeline(std::vector<BlockTask> &tasks)
+{
+    if (tasks.empty()) return true;
+    
+    const int max_streams = std::min(4, static_cast<int>(tasks.size()));
+    const int threads_per_block = 256;
+    const int blocks_per_grid = 512;
+    const unsigned int chunk_size = 16777216;  // 16M
+    const unsigned long long total_nonces = 0x100000000ULL;
+    const int initial_prefetch_window = 4;     // 初始窗口大小
+    
+    // Initialize prefetch contexts
+    std::vector<PrefetchContext> contexts(max_streams);
+    
+    for (int i = 0; i < max_streams; ++i) {
+        PrefetchContext &ctx = contexts[i];
+        
+        // Create stream
+        cudaStreamCreate(&ctx.stream);
+        
+        // Allocate device memory
+        cudaMalloc(&ctx.d_target, 32);
+        cudaMalloc(&ctx.d_midstate, 8 * sizeof(WORD));
+        cudaMalloc(&ctx.d_chunk1_base, 16 * sizeof(WORD));
+        cudaMalloc(&ctx.d_found, sizeof(int));
+        cudaMalloc(&ctx.d_result, sizeof(unsigned int));
+        
+        // Copy initial data
+        BlockTask &task = tasks[i];
+        cudaMemcpyAsync(ctx.d_target, task.target, 32, 
+                        cudaMemcpyHostToDevice, ctx.stream);
+        cudaMemcpyAsync(ctx.d_midstate, task.midstate, 8 * sizeof(WORD),
+                        cudaMemcpyHostToDevice, ctx.stream);
+        cudaMemcpyAsync(ctx.d_chunk1_base, task.chunk1_base, 16 * sizeof(WORD),
+                        cudaMemcpyHostToDevice, ctx.stream);
+        
+        // Initialize found flag
+        cudaMemsetAsync(ctx.d_found, 0, sizeof(int), ctx.stream);
+        
+        // Initialize state
+        ctx.block_idx = i;
+        ctx.chunks_launched = 0;
+        ctx.chunks_completed = 0;
+        ctx.prefetch_window = initial_prefetch_window;
+        ctx.block_found = false;
+        ctx.h_found = 0;
+        ctx.last_kernel_time = 10.0f;
+    }
+    
+    // Prefetch initial window of kernels for each stream
+    for (int i = 0; i < max_streams; ++i) {
+        PrefetchContext &ctx = contexts[i];
+        
+        for (int w = 0; w < ctx.prefetch_window; ++w) {
+            unsigned int start_nonce = w * chunk_size;
+            if (start_nonce >= total_nonces) break;
+            
+            // Create event for this chunk
+            cudaEvent_t event;
+            cudaEventCreate(&event);
+            ctx.events.push_back(event);
+            
+            // Launch kernel
+            mine_kernel_global<<<blocks_per_grid, threads_per_block, 0, ctx.stream>>>(
+                ctx.d_target,
+                ctx.d_midstate,
+                ctx.d_chunk1_base,
+                start_nonce,
+                chunk_size,
+                ctx.d_found,
+                ctx.d_result
+            );
+            
+            // Record event
+            cudaEventRecord(event, ctx.stream);
+            ctx.chunks_launched++;
+        }
+    }
+    
+    // Main loop: check completion and launch new chunks
+    int completed_blocks = 0;
+    
+    while (completed_blocks < max_streams) {
+        // Phase 1: Check for completed chunks
+        for (int i = 0; i < max_streams; ++i) {
+            PrefetchContext &ctx = contexts[i];
+            
+            if (ctx.block_found) continue;  // Already found, skip
+            
+            // Check the oldest uncompleted chunk
+            if (ctx.chunks_completed < ctx.events.size()) {
+                cudaEvent_t event = ctx.events[ctx.chunks_completed];
+                cudaError_t status = cudaEventQuery(event);
+                
+                if (status == cudaSuccess) {
+                    // Chunk completed
+                    ctx.chunks_completed++;
+                    
+                    // Check if found (async copy to avoid blocking)
+                    cudaMemcpyAsync(&ctx.h_found, ctx.d_found, sizeof(int),
+                                    cudaMemcpyDeviceToHost, ctx.stream);
+                    cudaStreamSynchronize(ctx.stream);  // Wait for the flag
+                    
+                    if (ctx.h_found) {
+                        // Found! Retrieve result
+                        cudaMemcpyAsync(&ctx.h_result_nonce, ctx.d_result, 
+                                        sizeof(unsigned int),
+                                        cudaMemcpyDeviceToHost, ctx.stream);
+                        cudaStreamSynchronize(ctx.stream);
+                        
+                        // Mark as found
+                        ctx.block_found = true;
+                        tasks[ctx.block_idx].block.nonce = ctx.h_result_nonce;
+                        tasks[ctx.block_idx].completed = true;
+                        completed_blocks++;
+                        
+                        // Stop prefetching for this stream
+                        ctx.prefetch_window = 0;
+                    }
+                    else {
+                        // Not found yet, check if exhausted
+                        unsigned int next_start = ctx.chunks_launched * chunk_size;
+                        if (next_start >= total_nonces) {
+                            // Exhausted
+                            ctx.block_found = true;
+                            tasks[ctx.block_idx].block.nonce = 0;
+                            tasks[ctx.block_idx].completed = true;
+                            completed_blocks++;
+                            ctx.prefetch_window = 0;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Phase 2: Launch new chunks (maintain prefetch window)
+        for (int i = 0; i < max_streams; ++i) {
+            PrefetchContext &ctx = contexts[i];
+            
+            if (ctx.block_found) continue;
+            
+            // Maintain the prefetch window
+            while (ctx.chunks_launched < ctx.chunks_completed + ctx.prefetch_window) {
+                unsigned int start_nonce = ctx.chunks_launched * chunk_size;
+                if (start_nonce >= total_nonces) break;
+                
+                // Create event
+                cudaEvent_t event;
+                cudaEventCreate(&event);
+                ctx.events.push_back(event);
+                
+                // Launch kernel
+                mine_kernel_global<<<blocks_per_grid, threads_per_block, 0, ctx.stream>>>(
+                    ctx.d_target,
+                    ctx.d_midstate,
+                    ctx.d_chunk1_base,
+                    start_nonce,
+                    chunk_size,
+                    ctx.d_found,
+                    ctx.d_result
+                );
+                
+                // Record event
+                cudaEventRecord(event, ctx.stream);
+                ctx.chunks_launched++;
+            }
+        }
+        
+        usleep(50);  // Reduce busy-polling
+    }
+    
+    // Cleanup
+    for (int i = 0; i < max_streams; ++i) {
+        PrefetchContext &ctx = contexts[i];
+        
+        cudaStreamSynchronize(ctx.stream);
+        
+        for (auto event : ctx.events) {
+            cudaEventDestroy(event);
+        }
+        
+        cudaFree(ctx.d_target);
+        cudaFree(ctx.d_midstate);
+        cudaFree(ctx.d_chunk1_base);
+        cudaFree(ctx.d_found);
+        cudaFree(ctx.d_result);
+        
+        cudaStreamDestroy(ctx.stream);
+    }
+    
+    return true;
+}
+```
+
+**关键改变：**
+1. 预先 launch 4 个 kernels 到每个 stream
+2. 当一个完成时，立即 launch 下一个（滑动窗口）
+3. 通过 d_found 让后续 kernels 快速退出
+4. 保持每个 stream 的 queue 中始终有 2-8 个 kernels
+
+---
+
+### A.4 （可选）动态窗口调整
+
+在 Phase 1 检查完成后添加：
+
+```cpp
+// Dynamic window adjustment (optional, for further optimization)
+if (ctx.chunks_completed > 0 && ctx.chunks_completed < ctx.events.size()) {
+    // Estimate kernel time from event timing
+    cudaEvent_t prev_event = ctx.events[ctx.chunks_completed - 1];
+    cudaEvent_t curr_event = ctx.events[ctx.chunks_completed];
+    float elapsed_ms;
+    cudaEventElapsedTime(&elapsed_ms, prev_event, curr_event);
+    
+    ctx.last_kernel_time = elapsed_ms;
+    
+    // Adjust window based on kernel time
+    if (elapsed_ms < 9.0f) {
+        // GPU has idle time, increase window
+        ctx.prefetch_window = std::min(8, ctx.prefetch_window + 1);
+    }
+    else if (elapsed_ms > 12.0f) {
+        // Too much contention, decrease window
+        ctx.prefetch_window = std::max(2, ctx.prefetch_window - 1);
+    }
+}
+```
+
+---
+
+### A.5 测试方案 A
+
+**测试步骤：**
+1. 在方案 B 的基础上实施方案 A
+2. 编译：`make`
+3. 正确性测试：`./hw4 testcases/case01.in outputs/case01_ab.out`
+4. 性能测试：`/usr/bin/time -v ./hw4 testcases/case01.in outputs/case01_ab.out`
+5. Profile：`nsys profile --stats=true ./hw4 testcases/case01.in outputs/case01_ab.out`
+
+**预期结果：**
+- ✅ 所有测试通过
+- ✅ case01: 3.6-3.8s (after B) → 2.0-2.5s
+- ✅ Overlap 效率：6% → 50-60%
+- ✅ GPU 上同时有 8-16 个 kernels 运行
+
+================================================================================
+四、风险评估与回滚方案
+================================================================================
+
+### 风险等级
+- **方案 B**: 🟢 低风险
+  - 局部优化，不改变架构
+  - 可以逐个优化点测试
+  - 容易回滚
+
+- **方案 A**: 🟡 中等风险
+  - 架构改变较大
+  - 需要仔细管理 events 和 streams
+  - 但保留了 early exit，浪费计算 < 5%
+
+### 回滚方案
+1. **保存当前版本**
+   ```bash
+   cp hw4.cu hw4_backup_4.20s.cu
+   ```
+
+2. **分阶段实施**
+   - 先完成 B，确认效果
+   - 如果 B 失败，回滚到 backup
+   - 如果 B 成功，再实施 A
+
+3. **每个阶段都测试**
+   - 正确性测试
+   - 性能测试
+   - Profile 分析
+
+================================================================================
+五、预期成果
+================================================================================
+
+### 最保守估计 (overlap 40%)
+- 方案 B: 4.20s → 3.70s (-12%)
+- 方案 A: 3.70s → 2.60s (-30%)
+- **总计: 2.60s** ✓
+
+### 预期估计 (overlap 50-60%)
+- 方案 B: 4.20s → 3.65s (-13%)
+- 方案 A: 3.65s → 2.20s (-40%)
+- **总计: 2.20s** ✓✓
+
+### 最理想估计 (overlap 70%)
+- 方案 B: 4.20s → 3.60s (-14%)
+- 方案 A: 3.60s → 1.85s (-49%)
+- **总计: 1.85s** ✓✓✓
+
+### 达标分析
+- 目标：3.0-3.5s
+- 预期：2.0-2.5s
+- **结论：大概率达标，甚至超越目标！**
+
+================================================================================
+六、时间估计
+================================================================================
+
+- 方案 B 实施：2-3 小时
+- 方案 B 测试：30 分钟
+- 方案 A 实施：4-6 小时
+- 方案 A 测试：1 小时
+- 调优与文档：2-3 小时
+
+**总计：10-14 小时**
+
+================================================================================
+七、总结
+================================================================================
+
+经过 10 分钟深度思考，制定了清晰的 A+B 实施路线：
+
+✅ **方案可行性高**
+- 方案 B 是成熟的算法优化技术
+- 方案 A 是合理的架构改进（滑动窗口 prefetch）
+- 保留了 early exit 能力
+
+✅ **风险可控**
+- 分阶段实施
+- 每个阶段独立测试
+- 有明确的回滚方案
+
+✅ **预期效果明确**
+- 方案 B: 10-15% kernel 加速
+- 方案 A: overlap 从 6% 提升到 50-60%
+- 总计: 2.0-2.5s，远超 3.0-3.5s 目标
+
+✅ **实施步骤清晰**
+- 详细的代码修改位置
+- 清晰的测试流程
+- 明确的性能指标
+
+**下一步：开始实施方案 B！**

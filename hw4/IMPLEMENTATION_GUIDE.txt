@@ -1,0 +1,123 @@
+================================================================================
+方案 A+B 实施快速指南
+================================================================================
+
+## 🎯 目标
+case01: 4.20s → 2.0-2.5s
+
+## 📋 实施顺序
+
+### 第一步：方案 B - Kernel 优化 (2-3小时)
+
+1. **B.1 优化 shared memory 加载** (第 476-486 行)
+   改为让前 8 个 threads 同时加载 midstate 和 chunk1_base
+
+2. **B.2 硬件字节序转换** (第 512-515 行)
+   用 `__byte_perm(nonce, 0, 0x0123)` 替换手动位操作
+
+3. **B.3 减少 register 使用** ⭐⭐⭐ (第 500-530 行)
+   复用 chunk1 数组存储 intermediate
+   从 56 registers → 24 registers (-32!)
+
+4. **B.4 优化 early exit** (第 492-495 行)
+   动态调整检查频率：前期 128 次/检查，后期 32 次/检查
+
+**测试：**
+```bash
+make
+./hw4 testcases/case01.in outputs/case01_b.out
+diff outputs/case01_b.out testcases/case01.out  # 确认正确
+/usr/bin/time -v ./hw4 testcases/case01.in outputs/case01_b.out
+```
+
+**预期：** 4.20s → 3.6-3.8s ✓
+
+---
+
+### 第二步：方案 A - Prefetch Pipeline (4-6小时)
+
+1. **A.1 新增 PrefetchContext 结构** (第 604 行后)
+   管理 prefetch 状态：events, chunks_launched, prefetch_window 等
+
+2. **A.2 修改 mine_kernel_global 开头**
+   添加：`if (*found) return;`  // 快速退出
+
+3. **A.3 完全重写 mine_blocks_pipeline**
+   - 初始化：预先 launch 4 个 kernels
+   - 主循环：
+     * Phase 1: 检查完成，取回结果
+     * Phase 2: Launch 新 kernels 维持窗口
+   - 清理：释放资源
+
+**测试：**
+```bash
+make
+./hw4 testcases/case01.in outputs/case01_ab.out
+diff outputs/case01_ab.out testcases/case01.out  # 确认正确
+/usr/bin/time -v ./hw4 testcases/case01.in outputs/case01_ab.out
+nsys profile --stats=true ./hw4 testcases/case01.in outputs/case01_ab.out
+```
+
+**预期：** 3.6-3.8s → 2.0-2.5s ✓✓✓
+
+---
+
+## 🔑 关键代码片段
+
+### B.3 Register 优化（最重要）
+```cuda
+// 删除这行
+// unsigned char intermediate[32];  // -32 registers!
+
+// 第一次 hash
+device_sha256_transform_words(state, chunk1);
+
+// 复用 chunk1[0-7] 存储结果
+for (int j = 0; j < 8; ++j) {
+    chunk1[j] = state[j];
+}
+
+// 第二次 hash（直接从 chunk1 读取）
+device_sha256(&hash, (unsigned char*)chunk1, 32);
+```
+
+### A.3 Prefetch 主循环
+```cpp
+// 预先 launch 4 个 kernels
+for (int w = 0; w < 4; ++w) {
+    mine_kernel_global<<<...>>>(start_nonce + w*16M, ...);
+    cudaEventRecord(events[w], stream);
+}
+
+// 主循环：维持窗口
+while (...) {
+    if (cudaEventQuery(event) == cudaSuccess) {
+        // 检查结果
+        if (found) { /* 停止 */ }
+        else { /* launch 下一个 */ }
+    }
+}
+```
+
+---
+
+## ⚠️  注意事项
+
+1. **保存 backup**: `cp hw4.cu hw4_backup.cu`
+2. **分阶段测试**: 每个优化后都测试
+3. **Profile 验证**: 用 nsys 确认 overlap 提升
+4. **正确性优先**: 任何测试失败都要先修复
+
+---
+
+## 📊 预期性能
+
+| 阶段 | 时间 | 改善 | 机制 |
+|------|------|------|------|
+| 当前 | 4.20s | - | 基线 |
+| +B | 3.65s | -13% | Kernel 加速 |
+| +A | 2.20s | -48% | Overlap 提升 |
+
+**达标：** 2.0-2.5s < 3.0-3.5s ✓✓✓
+
+================================================================================

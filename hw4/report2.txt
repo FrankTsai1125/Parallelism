@@ -1,0 +1,52 @@
+GPU Miner Stage B Follow-up Plan (2025-11-14)
+============================================
+
+問題回顧
+--------
+* `nsys` 顯示 `cudaEventSynchronize` 佔 CUDA API 98.6%，CPU 端仍被 `sem_wait/poll` 阻塞，代表 host-side pipeline 還是幾乎同步化。
+* `case00/01` 單一 block，雖然允許最多 6 stream，但同時只會啟用一個 context，無法發揮多 stream 優勢。
+* Chunk 初始尺寸 ≈1.57M nonces，單批 kernel 執行超過 5ms，host 在完成前無法重新排程，導致 pipeline 仍像 Stage A。
+
+優化目標
+--------
+1. 解除 `cudaEventSynchronize` 造成的序列化，讓 host loop 主要依賴 `cudaEventQuery` 及短暫 sleep/unlock。
+2. 針對單 block 情境，引入 persistent kernel 或 device-side work queue，使 GPU 自行持續抓 nonce 範圍。
+3. 調整 chunk policy：依 active stream 數量調整 chunk 大小，避免單一 block monopolize GPU。
+4. 增加 instrumentation，量測 enqueue/complete 間隔、GPU occupancy、active stream 數。
+
+執行步驟
+--------
+Step 1. 非阻塞完成處理  
+  - 將 `MAX_IDLE_SPIN_ROUNDS` 改為自適應（例如根據 busy stream 數量與前一次 kernel 耗時），減少 fallback 觸發。
+  - 加入 `cudaStreamWaitEvent` + round-robin host loop：若某 context 無法立刻完成，暫存於 wait list，避免立即 `synchronize`。
+  - 測試 `cudaLaunchHostFunc`（或 `cudaGraph` host node）替代 event polling，確認是否能在 callback 中處理完成邏輯。
+
+Step 2. Persistent kernel prototype  
+  - 建立 `device_work_queue` 結構，內含 `atomicAdd` head；host 將 batch metadata 直接寫入全域記憶體。  
+  - 啟動 1~2 個 persistent grids，thread block 從 queue 取 nonce range，做完後再取下一個。  
+  - 使用 `__threadfence_system` + host-visible flag 回報結果，確保找到 nonce 能即時退回。  
+  - 先在 `case01` 上驗證功能正確，再拓展到多 block。
+
+Step 3. Chunk sizing & fairness  
+  - 初始 chunk 設為 `stride / max(1, active_streams)`；若 streams < 2，進一步縮小至 `stride / 4`。  
+  - 只在最近 N 個完成都 < 某耗時閾值時才倍增 chunk，並限制每 block 同時排程的最大 chunk 長度。  
+  - 預留 `ready_queue` 中記錄「等待輪數」，若某 block 長期滯留，強制降低 chunk 以提升輪轉頻率。
+
+Step 4. Telemetry  
+  - 在 DEBUG 模式紀錄：每個 context kernel runtime、排隊時間、`cudaEventSynchronize` 次數，寫入 `pipeline_metrics.csv`。  
+  - 待流程穩定後移除或用 flag 控制。
+
+驗證流程
+--------
+1. 每完成一步，`make && ./run_case.sh 00` → `nsys profile ./run_case.sh 00`，比對 `cudaEventSynchronize` 比例。  
+2. 目標：`case00` wall time < 5s、`case01` < 6s，且 `cudaEventSynchronize` 低於 10%。  
+3. 針對 persistent kernel 版本，加跑 `case03` 確認多 block 下正確性。  
+4. 若功能穩定，更新 `report1.txt` 與 `report2.txt` 總結成果，再考慮 `NONCES_PER_THREAD` 調整。
+
+風險與備援
+----------
+* Persistent kernel 需警惕 watchdog 或 deadlock，先在受控環境測試，必要時保留原 pipeline 作 fallback。  
+* Host loop 調整若引入 race condition，立即回滾到目前版本（git 分支保留）。  
+* 若 `cudaLaunchHostFunc` 導致互鎖，改用更細的 non-blocking poll + 指數回退 sleep。
+
+
