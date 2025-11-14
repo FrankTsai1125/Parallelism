@@ -1,0 +1,3 @@
+srun: INFO: Try to avoid using --ntasks
+srun: INFO: It is recommended to specify `--nodes` and `--ntasks-per-node` together
+srun: job 825716 queued and waiting for resources

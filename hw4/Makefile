@@ -1,11 +1,12 @@
-NVFLAGS := -std=c++11 -O3 -arch=sm_70
+NVFLAGS := -std=c++11 -O3 -arch=sm_70 -Xcompiler -fopenmp
+LDFLAGS := -lgomp
 TARGET := hw4
 
 .PHONY: all
 all: $(TARGET)
 
 $(TARGET): sha256.o hw4.cu
-	nvcc $(NVFLAGS) -o hw4 hw4.cu sha256.o
+	nvcc $(NVFLAGS) -o hw4 hw4.cu sha256.o $(LDFLAGS)
 
 sha256.o: sha256.cu
 	nvcc $(NVFLAGS) -c sha256.cu

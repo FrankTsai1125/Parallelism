@@ -9,6 +9,7 @@
 #include <vector>
 #include <algorithm>
 #include <unistd.h>
+#include <omp.h>
 
 #include "sha256.h"
 
@@ -475,13 +476,17 @@ __global__ void mine_kernel_global(
 {
     __shared__ WORD s_midstate[8];
     __shared__ WORD s_chunk1_base[16];
+    __shared__ unsigned char s_target[32];
     
-    // Load midstate and chunk1_base into shared memory once
+    // Load midstate, chunk1_base, and target into shared memory once
     if (threadIdx.x < 8) {
         s_midstate[threadIdx.x] = midstate[threadIdx.x];
     }
     if (threadIdx.x < 16) {
         s_chunk1_base[threadIdx.x] = chunk1_base[threadIdx.x];
+    }
+    if (threadIdx.x < 32) {
+        s_target[threadIdx.x] = target[threadIdx.x];
     }
     __syncthreads();
     
@@ -509,10 +514,8 @@ __global__ void mine_kernel_global(
             chunk1[j] = s_chunk1_base[j];
         }
         
-        chunk1[3] = ((nonce & 0x000000FFu) << 24) |
-                    ((nonce & 0x0000FF00u) << 8)  |
-                    ((nonce & 0x00FF0000u) >> 8)  |
-                    ((nonce & 0xFF000000u) >> 24);
+        // Use hardware byte permutation for endianness conversion (1 instruction vs 11)
+        chunk1[3] = __byte_perm(nonce, 0, 0x0123);
         
         device_sha256_transform_words(state, chunk1);
         
@@ -529,7 +532,8 @@ __global__ void mine_kernel_global(
         SHA256 hash;
         device_sha256(&hash, intermediate, 32);
         
-        if (device_little_endian_bit_comparison(hash.b, target, 32) < 0) {
+        // Use shared memory target for faster comparison
+        if (device_little_endian_bit_comparison(hash.b, s_target, 32) < 0) {
             if (atomicCAS(found, 0, 1) == 0) {
                 *result_nonce = nonce;
             }
@@ -545,8 +549,8 @@ bool mine_block_persistent(HashBlock &block, unsigned char target[32])
 {
     const unsigned long long total_nonces = 0x100000000ULL;
     const int threads_per_block = 256;
-    const int blocks_per_grid = 512;  // Reduced for better persistence
-    const unsigned int batch_size = 65536;  // 64K nonces per atomic fetch
+    const int blocks_per_grid = 512;
+    const unsigned int batch_size = 262144;  // 256K nonces per atomic fetch (4x increase for less contention)
     
     // Compute midstate on host
     WORD midstate[8];
@@ -610,17 +614,76 @@ struct BlockTask {
     bool found;
 };
 
-struct StreamContext {
+// Stream pool context (persistent across multiple mine_blocks_pipeline calls)
+struct StreamPoolContext {
+    // CUDA resources (persistent, allocated once)
     cudaStream_t stream;
     cudaEvent_t event;
     unsigned char *d_target;
     WORD *d_midstate;
     WORD *d_chunk1_base;
-    DeviceWork *d_work;
-    DeviceWork h_work;
+    int *h_found_pinned;
+    unsigned int *h_result_nonce_pinned;
+    int *d_found;
+    unsigned int *d_result_nonce;
+    
+    // Task state (reset per call)
     int block_idx;
+    unsigned int current_nonce;
     bool busy;
+    
+    // Pool management
+    bool initialized;
 };
+
+// Global static stream pool (allocated once, reused forever)
+static StreamPoolContext g_stream_pool[4];
+static bool g_pool_initialized = false;
+
+// Initialize stream pool (called once on first use)
+static void initialize_stream_pool()
+{
+    if (g_pool_initialized) return;
+    
+    for (int i = 0; i < 4; ++i) {
+        StreamPoolContext &ctx = g_stream_pool[i];
+        
+        // Create persistent CUDA resources
+        cudaStreamCreateWithFlags(&ctx.stream, cudaStreamNonBlocking);
+        cudaEventCreate(&ctx.event);
+        
+        // Allocate device memory (never freed until program exit)
+        cudaMalloc(&ctx.d_target, 32);
+        cudaMalloc(&ctx.d_midstate, 8 * sizeof(WORD));
+        cudaMalloc(&ctx.d_chunk1_base, 16 * sizeof(WORD));
+        
+        // Allocate pinned host memory for zero-copy
+        cudaHostAlloc(&ctx.h_found_pinned, sizeof(int), cudaHostAllocMapped);
+        cudaHostAlloc(&ctx.h_result_nonce_pinned, sizeof(unsigned int), cudaHostAllocMapped);
+        
+        // Get device pointers
+        cudaHostGetDevicePointer(&ctx.d_found, ctx.h_found_pinned, 0);
+        cudaHostGetDevicePointer(&ctx.d_result_nonce, ctx.h_result_nonce_pinned, 0);
+        
+        // Mark as initialized
+        ctx.initialized = true;
+        ctx.block_idx = -1;
+        ctx.current_nonce = 0;
+        ctx.busy = false;
+    }
+    
+    g_pool_initialized = true;
+}
+
+// Reset stream context for new task (reuse existing resources)
+static void reset_stream_context(StreamPoolContext &ctx)
+{
+    ctx.block_idx = -1;
+    ctx.current_nonce = 0;
+    ctx.busy = false;
+    *ctx.h_found_pinned = 0;
+    *ctx.h_result_nonce_pinned = 0;
+}
 
 bool mine_blocks_pipeline(std::vector<BlockTask> &tasks)
 {
@@ -628,49 +691,16 @@ bool mine_blocks_pipeline(std::vector<BlockTask> &tasks)
     
     const int max_streams = std::min(4, static_cast<int>(tasks.size()));
     const int threads_per_block = 256;
-    
-    // Optimal configuration after extensive testing:
-    // - blocks_per_grid = 512: maximum kernel throughput
-    // - chunk_size = 16M: balance between launch overhead and overlap opportunity
-    // 
-    // Tested alternatives:
-    // - blocks=256: single kernel 19% slower, not compensated by better overlap
-    // - chunk_size=64M: reduces launches 75% but overlap efficiency drops 4.6%
-    //
-    // Current bottleneck: architectural (reactive kernel launch), not parametric
     const int blocks_per_grid = 512;
     const unsigned int chunk_size = 16777216;  // 16M nonces per kernel
     const unsigned long long total_nonces = 0x100000000ULL;
     
-    // Stream context with simple found flag
-    struct SimpleContext {
-        cudaStream_t stream;
-        cudaEvent_t event;
-        unsigned char *d_target;
-        WORD *d_midstate;
-        WORD *d_chunk1_base;
-        int *d_found;
-        unsigned int *d_result_nonce;
-        int h_found;
-        unsigned int h_result_nonce;
-        int block_idx;
-        unsigned int current_nonce;
-        bool busy;
-    };
+    // Initialize stream pool on first use (lazy initialization)
+    initialize_stream_pool();
     
-    // Initialize stream contexts
-    std::vector<SimpleContext> contexts(max_streams);
+    // Reset contexts for new tasks (reuse pool, no allocation/deallocation)
     for (int i = 0; i < max_streams; ++i) {
-        cudaStreamCreateWithFlags(&contexts[i].stream, cudaStreamNonBlocking);
-        cudaEventCreate(&contexts[i].event);
-        cudaMalloc(&contexts[i].d_target, 32);
-        cudaMalloc(&contexts[i].d_midstate, 8 * sizeof(WORD));
-        cudaMalloc(&contexts[i].d_chunk1_base, 16 * sizeof(WORD));
-        cudaMalloc(&contexts[i].d_found, sizeof(int));
-        cudaMalloc(&contexts[i].d_result_nonce, sizeof(unsigned int));
-        contexts[i].block_idx = -1;
-        contexts[i].current_nonce = 0;
-        contexts[i].busy = false;
+        reset_stream_context(g_stream_pool[i]);
     }
     
     int next_task = 0;
@@ -687,32 +717,25 @@ bool mine_blocks_pipeline(std::vector<BlockTask> &tasks)
         
         // Step 1: Check for completed chunks and handle results
         for (int i = 0; i < max_streams; ++i) {
-            if (contexts[i].busy) {
-                cudaError_t status = cudaEventQuery(contexts[i].event);
+            if (g_stream_pool[i].busy) {
+                cudaError_t status = cudaEventQuery(g_stream_pool[i].event);
                 
                 if (status == cudaSuccess) {
-                    SimpleContext &ctx = contexts[i];
+                    StreamPoolContext &ctx = g_stream_pool[i];
                     kernel_completed[i] = true;  // Mark as just completed
                     
-                    // Check if found (need to sync here to read result immediately)
-                    cudaMemcpyAsync(&ctx.h_found, ctx.d_found, sizeof(int),
-                                   cudaMemcpyDeviceToHost, ctx.stream);
-                    cudaStreamSynchronize(ctx.stream);
-                    
-                    if (ctx.h_found) {
-                        cudaMemcpyAsync(&ctx.h_result_nonce, ctx.d_result_nonce, 
-                                       sizeof(unsigned int),
-                                       cudaMemcpyDeviceToHost, ctx.stream);
-                        cudaStreamSynchronize(ctx.stream);
-                    }
+                    // Direct read from pinned host memory (zero-copy, no sync needed!)
+                    // The kernel writes to device pointer which maps to host pinned memory
+                    int found_value = *ctx.h_found_pinned;
+                    unsigned int result_nonce_value = *ctx.h_result_nonce_pinned;
                     
                     // If found or exhausted all nonces, complete task
-                    if (ctx.h_found || ctx.current_nonce >= total_nonces) {
+                    if (found_value || ctx.current_nonce >= total_nonces) {
                         BlockTask &task = tasks[ctx.block_idx];
                         task.completed = true;
-                        if (ctx.h_found) {
+                        if (found_value) {
                             task.found = true;
-                            task.block.nonce = ctx.h_result_nonce;
+                            task.block.nonce = result_nonce_value;
                         } else {
                             task.found = false;
                             task.block.nonce = 0;
@@ -728,16 +751,19 @@ bool mine_blocks_pipeline(std::vector<BlockTask> &tasks)
         
         // Step 2: Launch new work on available streams
         for (int i = 0; i < max_streams; ++i) {
-            if (!contexts[i].busy && next_task < tasks.size()) {
+            if (!g_stream_pool[i].busy && next_task < tasks.size()) {
                 BlockTask &task = tasks[next_task];
-                SimpleContext &ctx = contexts[i];
+                StreamPoolContext &ctx = g_stream_pool[i];
                 
                 // Initialize new task
                 ctx.block_idx = next_task;
                 ctx.current_nonce = 0;
-                ctx.h_found = 0;
                 
-                // Copy midstate, chunk1_base, target
+                // Initialize pinned memory to 0 (direct host write)
+                *ctx.h_found_pinned = 0;
+                *ctx.h_result_nonce_pinned = 0;
+                
+                // Copy midstate, chunk1_base, target to device
                 cudaMemcpyAsync(ctx.d_midstate, task.midstate, 
                                8 * sizeof(WORD),
                                cudaMemcpyHostToDevice, ctx.stream);
@@ -745,8 +771,6 @@ bool mine_blocks_pipeline(std::vector<BlockTask> &tasks)
                                16 * sizeof(WORD),
                                cudaMemcpyHostToDevice, ctx.stream);
                 cudaMemcpyAsync(ctx.d_target, task.target, 32,
-                               cudaMemcpyHostToDevice, ctx.stream);
-                cudaMemcpyAsync(ctx.d_found, &ctx.h_found, sizeof(int),
                                cudaMemcpyHostToDevice, ctx.stream);
                 
                 ctx.busy = true;
@@ -756,10 +780,10 @@ bool mine_blocks_pipeline(std::vector<BlockTask> &tasks)
         
         // Step 3: Launch next chunk on busy streams
         for (int i = 0; i < max_streams; ++i) {
-            if (contexts[i].busy && !contexts[i].h_found && 
-                contexts[i].current_nonce < total_nonces) {
+            if (g_stream_pool[i].busy && !(*g_stream_pool[i].h_found_pinned) && 
+                g_stream_pool[i].current_nonce < total_nonces) {
                 
-                SimpleContext &ctx = contexts[i];
+                StreamPoolContext &ctx = g_stream_pool[i];
                 
                 // Launch next chunk if: first launch OR previous kernel just completed
                 // This avoids redundant cudaEventQuery since we already checked in Step 1
@@ -791,16 +815,8 @@ bool mine_blocks_pipeline(std::vector<BlockTask> &tasks)
         usleep(50);
     }
     
-    // Cleanup
-    for (int i = 0; i < max_streams; ++i) {
-        cudaStreamDestroy(contexts[i].stream);
-        cudaEventDestroy(contexts[i].event);
-        cudaFree(contexts[i].d_target);
-        cudaFree(contexts[i].d_midstate);
-        cudaFree(contexts[i].d_chunk1_base);
-        cudaFree(contexts[i].d_found);
-        cudaFree(contexts[i].d_result_nonce);
-    }
+    // No cleanup needed! Stream pool is persistent and reused
+    // Resources will be automatically freed when program exits
     
     return true;
 }
@@ -900,6 +916,7 @@ int main(int argc, char **argv)
         // Multi-block: use pipeline
         std::vector<BlockTask> tasks(totalblock);
         
+        // Phase 1: Serial file reading and block construction
         for (int i = 0; i < totalblock; ++i) {
             char version[9], prevhash[65], ntime[9], nbits[9];
             int tx;
@@ -942,15 +959,20 @@ int main(int argc, char **argv)
             tasks[i].target[sb + 1] = static_cast<unsigned char>(mant >> (8-rb));
             tasks[i].target[sb + 2] = static_cast<unsigned char>(mant >> (16-rb));
             tasks[i].target[sb + 3] = static_cast<unsigned char>(mant >> (24-rb));
-
-            // Precompute midstate
-            compute_midstate_and_chunk1(tasks[i].block, tasks[i].midstate, tasks[i].chunk1_base);
             
             tasks[i].completed = false;
             tasks[i].found = false;
 
             delete[] merkle_branch;
             delete[] raw_merkle_branch;
+        }
+        
+        // Phase 2: Parallel midstate computation (CPU-bound SHA-256)
+        // Use OpenMP to parallelize across all blocks
+        // With 72 CPU threads available, 4 blocks will be computed in parallel
+        #pragma omp parallel for schedule(static)
+        for (int i = 0; i < totalblock; ++i) {
+            compute_midstate_and_chunk1(tasks[i].block, tasks[i].midstate, tasks[i].chunk1_base);
         }
         
         // Run pipeline

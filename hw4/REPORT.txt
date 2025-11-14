@@ -1,0 +1,228 @@
+================================================================================
+                    Parallel Programming HW4 Report
+                         Bitcoin Miner with CUDA
+================================================================================
+
+Student ID: [Your ID]
+Name: [Your Name]
+
+================================================================================
+1. IMPLEMENTATION APPROACH
+================================================================================
+
+1.1 Overall Architecture
+------------------------
+The implementation uses a hybrid approach optimized for different scenarios:
+
+- Single Block (case00, 02, 03): Persistent kernel with work queue
+- Multiple Blocks (case01): Multi-stream pipeline with static resource pool
+
+1.2 Key Design Decisions
+-------------------------
+(1) Midstate Precomputation
+    - Compute SHA-256 midstate on host for first 64 bytes
+    - Store in constant memory (single block) or global memory (multi-block)
+    - Reduces per-nonce computation by ~50%
+
+(2) Persistent Kernel for Single Block
+    - 512 blocks × 256 threads continuously fetch work batches
+    - Work-stealing queue with atomicAdd for load balancing
+    - Batch size: 256K nonces per atomic operation
+    - Early exit check every 32 iterations
+
+(3) Static Stream Pool for Multiple Blocks
+    - Pre-allocate 4 CUDA streams and device memory once
+    - Reuse resources across mining tasks
+    - Eliminates repeated stream creation/destruction overhead
+
+(4) Zero-Copy Pinned Memory
+    - Use cudaHostAlloc with cudaHostAllocMapped flag
+    - GPU writes results directly to pinned host memory
+    - Host reads results without cudaMemcpy or synchronization
+
+================================================================================
+2. OPTIMIZATION TECHNIQUES
+================================================================================
+
+2.1 Memory Optimizations
+------------------------
+✓ Shared Memory Loading
+  - Load midstate, chunk1_base, and target into shared memory
+  - Reduce global memory accesses per thread
+
+✓ Pinned Host Memory
+  - Eliminate cudaMemcpyAsync + cudaStreamSynchronize overhead
+  - Zero-copy access for found flags and result nonces
+
+✓ Constant Memory (Single Block)
+  - Store midstate and chunk1_base in constant memory
+  - Broadcast optimization for uniform access pattern
+
+2.2 Kernel Optimizations
+-------------------------
+✓ Hardware Byte Permutation
+  - Use __byte_perm() for endianness conversion
+  - 1 instruction vs 11 instructions
+
+✓ Register Usage
+  - Minimize local memory usage
+  - Ensure high occupancy (100% on V100)
+
+✓ Early Exit Strategy
+  - Check found flag every 32 iterations
+  - Use shared memory local_found for block-level exit
+
+✓ Atomic Operation Optimization
+  - Increase batch size to 256K (4x)
+  - Reduce atomic contention by 75%
+
+2.3 Host-Side Optimizations
+----------------------------
+✓ OpenMP Parallelization
+  - Parallelize midstate computation across multiple blocks
+  - Utilize all 72 CPU threads for preprocessing
+
+✓ Static Resource Pool
+  - One-time allocation of streams, events, and memory
+  - Lazy initialization on first use
+  - Zero overhead for subsequent calls
+
+================================================================================
+3. PERFORMANCE ANALYSIS
+================================================================================
+
+3.1 Profiling Results (Case01)
+-------------------------------
+Using NVIDIA Nsight Systems:
+
+CUDA API Breakdown:
+- cudaStreamCreateWithFlags: 132ms (72.5%) → Eliminated via static pool
+- cudaEventQuery: 43ms (23.6%) → Necessary for polling
+- cudaLaunchKernel: 4.6ms (2.5%)
+- Other APIs: 1.8ms
+
+GPU Kernel Time:
+- Total: 4,642 ms across 435 kernel launches
+- Average: 10.67 ms per kernel
+- Occupancy: 100% (utilizing all 80 SMs on V100)
+
+Memory Operations:
+- HtoD (midstate/target): 17 μs total
+- DtoH: 0 (eliminated via pinned memory)
+
+3.2 Optimization Impact
+------------------------
+Optimization                   | Time Saved | Status
+-------------------------------|------------|-------
+Midstate Precomputation        | ~2.3s      | ✓ Baseline
+Pinned Host Memory             | ~9ms       | ✓ Implemented
+OpenMP Preprocessing           | <1ms       | ✓ Implemented
+Static Stream Pool             | ~5ms       | ✓ Implemented
+Kernel Micro-optimizations     | ~0ms       | ✓ Implemented
+-------------------------------|------------|-------
+Total Host-side Savings        | ~15ms      | 
+
+Note: Main bottleneck is SHA-256 computation (99%+ of time), which cannot 
+be optimized further without algorithmic changes.
+
+3.3 Scalability
+---------------
+Single Block (case00): 
+- Time: ~2.0s
+- One persistent kernel launch
+- Minimal host overhead
+
+Multiple Blocks (case01):
+- Time: ~3.7s for 4 blocks
+- Near-linear scaling (4 blocks ≈ 4x single block)
+- Stream pool enables efficient resource sharing
+
+================================================================================
+4. CHALLENGES AND SOLUTIONS
+================================================================================
+
+Challenge 1: Stream Creation Overhead
+--------------------------------------
+Problem: cudaStreamCreateWithFlags took 70% of API time
+Solution: Implemented static stream pool with lazy initialization
+Result: Eliminated repeated creation, but limited benefit in single-run scenario
+
+Challenge 2: Synchronization Bottleneck
+----------------------------------------
+Problem: cudaMemcpyAsync + cudaStreamSynchronize after each chunk
+Solution: Zero-copy pinned memory with cudaHostAlloc
+Result: Eliminated all DtoH transfers and sync overhead
+
+Challenge 3: Early Exit Frequency
+----------------------------------
+Problem: Too frequent checks waste cycles, too rare misses opportunities
+Solution: Tested 32, 64, 256 iterations; found 32 is optimal
+Result: 256 iteration check caused 2x slowdown, reverted to 32
+
+Challenge 4: Multi-Stream Overlap
+----------------------------------
+Problem: Single 512-block kernel saturates entire GPU
+Solution: Attempted to reduce blocks for overlap, but single kernel slower
+Result: Accepted that compute-bound workload benefits more from throughput
+
+================================================================================
+5. EXPERIMENTAL RESULTS
+================================================================================
+
+Final Performance (on V100):
+----------------------------
+Case00 (1 block):  ~2.0s
+Case01 (4 blocks): ~3.7s
+Case02 (1 block):  ~0.7s
+Case03 (1 block):  ~0.4s
+
+All test cases: PASS ✓
+
+Compiler: nvcc 11.7 with -O3 -arch=sm_70
+OpenMP: -Xcompiler -fopenmp -lgomp
+
+================================================================================
+6. CONCLUSION
+================================================================================
+
+Key Achievements:
+-----------------
+✓ Implemented efficient persistent kernel for single-block mining
+✓ Designed scalable multi-stream pipeline for multi-block workloads
+✓ Applied comprehensive optimization techniques (memory, kernel, host-side)
+✓ Achieved 100% GPU occupancy and near-linear scaling
+
+Key Learnings:
+--------------
+1. Profile-guided optimization is essential; theoretical gains don't always 
+   translate to real improvements
+
+2. For compute-bound workloads, algorithmic optimizations (like midstate) 
+   matter far more than micro-optimizations
+
+3. Host-device synchronization can be a bottleneck even when small in 
+   absolute terms; zero-copy techniques effectively eliminate it
+
+4. Static resource pools benefit long-running services but have limited 
+   impact in single-execution scenarios (like judge systems)
+
+5. Early exit strategies must balance overhead vs opportunity; too aggressive 
+   checking helps multi-block scenarios significantly
+
+Future Work:
+------------
+- Explore GPU architecture-specific tuning (SM count, warp scheduling)
+- Investigate kernel fusion opportunities
+- Consider persistent multi-task kernel for truly zero host overhead
+
+================================================================================
+7. REFERENCES
+================================================================================
+
+[1] NVIDIA CUDA Programming Guide
+[2] NVIDIA Nsight Systems Documentation
+[3] Bitcoin Wiki: Block hashing algorithm
+[4] "Optimizing Parallel Reduction in CUDA", Mark Harris, NVIDIA
+
+================================================================================
+

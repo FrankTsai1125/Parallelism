@@ -1,0 +1,77 @@
+Generating '/tmp/nsys-report-3a73.qdstrm'
+[1/8] [0%                          ] case01_fixed.nsys-rep[1/8] [0%                          ] case01_fixed.nsys-rep[1/8] [10%                         ] case01_fixed.nsys-rep[1/8] [9%                          ] case01_fixed.nsys-rep[1/8] [==19%                       ] case01_fixed.nsys-rep[1/8] [==20%                       ] case01_fixed.nsys-rep[1/8] [===22%                      ] case01_fixed.nsys-rep[1/8] [===23%                      ] case01_fixed.nsys-rep[1/8] [===24%                      ] case01_fixed.nsys-rep[1/8] [====25%                     ] case01_fixed.nsys-rep[1/8] [====27%                     ] case01_fixed.nsys-rep[1/8] [====28%                     ] case01_fixed.nsys-rep[1/8] [=====30%                    ] case01_fixed.nsys-rep[1/8] [=====31%                    ] case01_fixed.nsys-rep[1/8] [=====32%                    ] case01_fixed.nsys-rep[1/8] [======34%                   ] case01_fixed.nsys-rep[1/8] [=======36%                  ] case01_fixed.nsys-rep[1/8] [=======37%                  ] case01_fixed.nsys-rep[1/8] [=======38%                  ] case01_fixed.nsys-rep[1/8] [========40%                 ] case01_fixed.nsys-rep[1/8] [========42%                 ] case01_fixed.nsys-rep[1/8] [=========43%                ] case01_fixed.nsys-rep[1/8] [=========44%                ] case01_fixed.nsys-rep[1/8] [=========46%                ] case01_fixed.nsys-rep[1/8] [==========48%               ] case01_fixed.nsys-rep[1/8] [===========50%              ] case01_fixed.nsys-rep[1/8] [===========52%              ] case01_fixed.nsys-rep[1/8] [============54%             ] case01_fixed.nsys-rep[1/8] [============56%             ] case01_fixed.nsys-rep[1/8] [=============58%            ] case01_fixed.nsys-rep[1/8] [========================100%] case01_fixed.nsys-rep[1/8] [========================100%] case01_fixed.nsys-rep
+[2/8] [0%                          ] case01_fixed.sqlite[2/8] [1%                          ] case01_fixed.sqlite[2/8] [2%                          ] case01_fixed.sqlite[2/8] [3%                          ] case01_fixed.sqlite[2/8] [4%                          ] case01_fixed.sqlite[2/8] [5%                          ] case01_fixed.sqlite[2/8] [6%                          ] case01_fixed.sqlite[2/8] [7%                          ] case01_fixed.sqlite[2/8] [8%                          ] case01_fixed.sqlite[2/8] [9%                          ] case01_fixed.sqlite[2/8] [10%                         ] case01_fixed.sqlite[2/8] [11%                         ] case01_fixed.sqlite[2/8] [12%                         ] case01_fixed.sqlite[2/8] [13%                         ] case01_fixed.sqlite[2/8] [14%                         ] case01_fixed.sqlite[2/8] [=15%                        ] case01_fixed.sqlite[2/8] [=16%                        ] case01_fixed.sqlite[2/8] [=17%                        ] case01_fixed.sqlite[2/8] [==18%                       ] case01_fixed.sqlite[2/8] [==19%                       ] case01_fixed.sqlite[2/8] [==20%                       ] case01_fixed.sqlite[2/8] [==21%                       ] case01_fixed.sqlite[2/8] [===22%                      ] case01_fixed.sqlite[2/8] [===23%                      ] case01_fixed.sqlite[2/8] [===24%                      ] case01_fixed.sqlite[2/8] [====25%                     ] case01_fixed.sqlite[2/8] [====26%                     ] case01_fixed.sqlite[2/8] [====27%                     ] case01_fixed.sqlite[2/8] [====28%                     ] case01_fixed.sqlite[2/8] [=====29%                    ] case01_fixed.sqlite[2/8] [=====30%                    ] case01_fixed.sqlite[2/8] [=====31%                    ] case01_fixed.sqlite[2/8] [=====32%                    ] case01_fixed.sqlite[2/8] [======33%                   ] case01_fixed.sqlite[2/8] [======34%                   ] case01_fixed.sqlite[2/8] [======35%                   ] case01_fixed.sqlite[2/8] [=======36%                  ] case01_fixed.sqlite[2/8] [=======37%                  ] case01_fixed.sqlite[2/8] [=======38%                  ] case01_fixed.sqlite[2/8] [=======39%                  ] case01_fixed.sqlite[2/8] [========40%                 ] case01_fixed.sqlite[2/8] [========41%                 ] case01_fixed.sqlite[2/8] [========42%                 ] case01_fixed.sqlite[2/8] [=========43%                ] case01_fixed.sqlite[2/8] [=========44%                ] case01_fixed.sqlite[2/8] [=========45%                ] case01_fixed.sqlite[2/8] [=========46%                ] case01_fixed.sqlite[2/8] [==========47%               ] case01_fixed.sqlite[2/8] [==========48%               ] case01_fixed.sqlite[2/8] [==========49%               ] case01_fixed.sqlite[2/8] [===========50%              ] case01_fixed.sqlite[2/8] [===========51%              ] case01_fixed.sqlite[2/8] [===========52%              ] case01_fixed.sqlite[2/8] [===========53%              ] case01_fixed.sqlite[2/8] [============54%             ] case01_fixed.sqlite[2/8] [============55%             ] case01_fixed.sqlite[2/8] [============56%             ] case01_fixed.sqlite[2/8] [============57%             ] case01_fixed.sqlite[2/8] [=============58%            ] case01_fixed.sqlite[2/8] [=============59%            ] case01_fixed.sqlite[2/8] [=============60%            ] case01_fixed.sqlite[2/8] [==============61%           ] case01_fixed.sqlite[2/8] [==============62%           ] case01_fixed.sqlite[2/8] [==============63%           ] case01_fixed.sqlite[2/8] [==============64%           ] case01_fixed.sqlite[2/8] [===============65%          ] case01_fixed.sqlite[2/8] [===============66%          ] case01_fixed.sqlite[2/8] [===============67%          ] case01_fixed.sqlite[2/8] [================68%         ] case01_fixed.sqlite[2/8] [================69%         ] case01_fixed.sqlite[2/8] [================70%         ] case01_fixed.sqlite[2/8] [================71%         ] case01_fixed.sqlite[2/8] [=================72%        ] case01_fixed.sqlite[2/8] [=================73%        ] case01_fixed.sqlite[2/8] [=================74%        ] case01_fixed.sqlite[2/8] [==================75%       ] case01_fixed.sqlite[2/8] [==================76%       ] case01_fixed.sqlite[2/8] [==================77%       ] case01_fixed.sqlite[2/8] [==================78%       ] case01_fixed.sqlite[2/8] [===================79%      ] case01_fixed.sqlite[2/8] [===================80%      ] case01_fixed.sqlite[2/8] [===================81%      ] case01_fixed.sqlite[2/8] [===================82%      ] case01_fixed.sqlite[2/8] [====================83%     ] case01_fixed.sqlite[2/8] [====================84%     ] case01_fixed.sqlite[2/8] [====================85%     ] case01_fixed.sqlite[2/8] [=====================86%    ] case01_fixed.sqlite[2/8] [=====================87%    ] case01_fixed.sqlite[2/8] [=====================88%    ] case01_fixed.sqlite[2/8] [=====================89%    ] case01_fixed.sqlite[2/8] [======================90%   ] case01_fixed.sqlite[2/8] [======================91%   ] case01_fixed.sqlite[2/8] [======================92%   ] case01_fixed.sqlite[2/8] [=======================93%  ] case01_fixed.sqlite[2/8] [=======================94%  ] case01_fixed.sqlite[2/8] [=======================95%  ] case01_fixed.sqlite[2/8] [=======================96%  ] case01_fixed.sqlite[2/8] [========================97% ] case01_fixed.sqlite[2/8] [========================98% ] case01_fixed.sqlite[2/8] [========================99% ] case01_fixed.sqlite[2/8] [========================100%] case01_fixed.sqlite[2/8] [========================100%] case01_fixed.sqlite
+SKIPPED: /home/p13922006/Parallelism/hw4/performance_reports_kernel_opt/case01_fixed.sqlite does not contain NV Tools Extension (NVTX) data.
+[3/8] Executing 'nvtxsum' stats report
+[4/8] Executing 'osrtsum' stats report
+
+Operating System Runtime API Statistics:
+
+ Time (%)  Total Time (ns)  Num Calls    Avg (ns)      Med (ns)     Min (ns)   Max (ns)    StdDev (ns)        Name     
+ --------  ---------------  ---------  ------------  -------------  --------  -----------  ------------  --------------
+     51.5    3,903,709,214         53  73,654,890.8  100,129,986.0     7,369  100,151,868  43,033,708.7  poll          
+     47.0    3,561,788,352     34,508     103,216.3      103,851.0    53,856      941,610       8,283.7  usleep        
+      1.4      108,485,142      1,697      63,927.6       14,664.0     1,311   32,762,096     803,677.4  ioctl         
+      0.0        2,070,211         58      35,693.3        6,835.0     3,328    1,429,601     186,592.7  mmap64        
+      0.0        1,900,671         11     172,788.3      136,218.0   113,599      506,383     111,960.0  pthread_create
+      0.0        1,592,797         13     122,522.8       27,679.0    20,397    1,227,180     332,052.3  sem_timedwait 
+      0.0        1,063,534         88      12,085.6        2,427.5     1,570      517,667      59,056.3  fopen         
+      0.0          669,393        128       5,229.6        5,026.5     1,790       14,550       1,580.0  open64        
+      0.0          311,069         68       4,574.5        4,546.5     1,638       29,606       3,256.8  fgetc         
+      0.0          278,711         81       3,440.9        1,220.0     1,013      162,161      17,889.7  fclose        
+      0.0          171,342         26       6,590.1        4,018.5     1,149       41,971       8,185.1  mmap          
+      0.0           58,625          1      58,625.0       58,625.0    58,625       58,625           0.0  fgets         
+      0.0           38,870         13       2,990.0        3,123.0     1,653        4,883         881.9  write         
+      0.0           26,973          7       3,853.3        3,702.0     1,175        8,249       2,168.1  open          
+      0.0           23,970         13       1,843.8        1,760.0     1,199        2,728         459.9  read          
+      0.0           20,556          2      10,278.0       10,278.0     6,949       13,607       4,707.9  fread         
+      0.0           18,856          5       3,771.2        3,560.0     2,469        6,210       1,490.1  munmap        
+      0.0           12,802          2       6,401.0        6,401.0     4,120        8,682       3,225.8  socket        
+      0.0            9,299          1       9,299.0        9,299.0     9,299        9,299           0.0  connect       
+      0.0            8,575          3       2,858.3        1,795.0     1,459        5,321       2,139.3  fcntl         
+      0.0            5,859          1       5,859.0        5,859.0     5,859        5,859           0.0  pipe2         
+      0.0            1,558          1       1,558.0        1,558.0     1,558        1,558           0.0  bind          
+
+[5/8] Executing 'cudaapisum' stats report
+
+CUDA API Statistics:
+
+ Time (%)  Total Time (ns)  Num Calls    Avg (ns)    Med (ns)  Min (ns)   Max (ns)    StdDev (ns)             Name           
+ --------  ---------------  ---------  ------------  --------  --------  -----------  ------------  -------------------------
+     73.3      134,382,550          4  33,595,637.5  66,215.5     2,273  134,247,846  67,101,499.1  cudaStreamCreateWithFlags
+     22.9       41,974,217     76,103         551.5     387.0       360       15,573         428.4  cudaEventQuery           
+      2.4        4,350,950        435      10,002.2   8,330.0     3,418       65,629       5,953.8  cudaLaunchKernel         
+      0.7        1,327,850        435       3,052.5   2,690.0     1,798       10,909       1,302.1  cudaEventRecord          
+      0.6        1,012,116          8     126,514.5   3,516.5     3,365      985,067     346,908.3  cudaHostAlloc            
+      0.1          225,571         12      18,797.6   2,890.5     2,283      191,144      54,281.6  cudaMalloc               
+      0.0           67,247         12       5,603.9   2,548.0     2,218       27,524       7,536.2  cudaMemcpyAsync          
+      0.0           16,107          4       4,026.8   1,297.5       567       12,945       5,983.9  cudaEventCreate          
+      0.0            1,669          1       1,669.0   1,669.0     1,669        1,669           0.0  cuModuleGetLoadingMode   
+
+[6/8] Executing 'gpukernsum' stats report
+
+CUDA Kernel Statistics:
+
+ Time (%)  Total Time (ns)  Instances    Avg (ns)      Med (ns)    Min (ns)    Max (ns)   StdDev (ns)                                                  Name                                                
+ --------  ---------------  ---------  ------------  ------------  ---------  ----------  -----------  ----------------------------------------------------------------------------------------------------
+    100.0    4,642,470,166        435  10,672,345.2  10,972,916.0  9,494,979  13,433,502    649,519.1  mine_kernel_global(unsigned char *, unsigned int *, unsigned int *, unsigned int, unsigned int, int…
+
+[7/8] Executing 'gpumemtimesum' stats report
+
+CUDA Memory Operation Statistics (by time):
+
+ Time (%)  Total Time (ns)  Count  Avg (ns)  Med (ns)  Min (ns)  Max (ns)  StdDev (ns)      Operation     
+ --------  ---------------  -----  --------  --------  --------  --------  -----------  ------------------
+    100.0           17,184     12   1,432.0   1,376.0     1,344     1,792        122.1  [CUDA memcpy HtoD]
+
+[8/8] Executing 'gpumemsizesum' stats report
+
+CUDA Memory Operation Statistics (by size):
+
+ Total (MB)  Count  Avg (MB)  Med (MB)  Min (MB)  Max (MB)  StdDev (MB)      Operation     
+ ----------  -----  --------  --------  --------  --------  -----------  ------------------
+      0.001     12     0.000     0.000     0.000     0.000        0.000  [CUDA memcpy HtoD]
+
+Generated:
+    /home/p13922006/Parallelism/hw4/performance_reports_kernel_opt/case01_fixed.nsys-rep
+    /home/p13922006/Parallelism/hw4/performance_reports_kernel_opt/case01_fixed.sqlite
