@@ -1,0 +1,13 @@
+
+[0;31mWARNING: We are phasing out development and support for roctracer/rocprofiler/rocprof/rocprofv2 in favor of rocprofiler-sdk/rocprofv3 in upcoming ROCm releases. Going forward, only critical defect fixes will be addressed for older versions of profiling tools and libraries. We encourage all users to upgrade to the latest version, rocprofiler-sdk library and rocprofv3 tool, to ensure continued support and access to new features.[0m
+
+RPL: on '251127_070601' from '/opt/rocm-7.1.0' in '/home/pps084/Parallelism/hw5/final_reports/temp_b50'
+RPL: profiling '"/home/pps084/Parallelism/hw5/hw5" "/home/pps084/Parallelism/hw5/testcases/b50.in" "/home/pps084/Parallelism/hw5/outputs/b50.out"'
+RPL: input file ''
+RPL: output dir '/tmp/rpl_data_251127_070601_2426997'
+RPL: result dir '/tmp/rpl_data_251127_070601_2426997/input_results_251127_070601'
+ROCProfiler: input from "/tmp/rpl_data_251127_070601_2426997/input.xml"
+  0 metrics
+
+ROCPRofiler: 0 contexts collected, output directory /tmp/rpl_data_251127_070601_2426997/input_results_251127_070601
+srun: error: elsalab-amd: task 0: Exited with exit code 1

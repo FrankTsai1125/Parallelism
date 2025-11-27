@@ -275,12 +275,45 @@ __global__ void compute_accel_per_particle(
 __global__ void update_motion_kernel(
     int n, double* vx, double* vy, double* vz,
     double* qx, double* qy, double* qz,
-    const double* ax, const double* ay, const double* az) 
+    const double* ax, const double* ay, const double* az,
+    int step, int planet, int asteroid,
+    double* min_dist_ptr, int* hit_step_ptr,
+    int missile_target_id, int* missile_hit_step_ptr, int* stop_flag,
+    bool do_check) 
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) {
         vx[i] += ax[i] * param::dt; vy[i] += ay[i] * param::dt; vz[i] += az[i] * param::dt;
         qx[i] += vx[i] * param::dt; qy[i] += vy[i] * param::dt; qz[i] += vz[i] * param::dt;
+    }
+    
+    if (do_check && blockIdx.x == 0) {
+        __syncthreads(); // Wait for Block 0 updates
+        if (threadIdx.x == 0) {
+            double dx = qx[planet] - qx[asteroid];
+            double dy = qy[planet] - qy[asteroid];
+            double dz = qz[planet] - qz[asteroid];
+            double dist = sqrt(dx*dx + dy*dy + dz*dz);
+            
+            if (dist < *min_dist_ptr) *min_dist_ptr = dist;
+            
+            int check_step = step + 1;
+            if (*hit_step_ptr == -2 && dist < param::planet_radius) {
+                *hit_step_ptr = check_step;
+                *stop_flag = 1;
+            }
+            
+            if (missile_target_id >= 0 && *missile_hit_step_ptr == -1) {
+                double m_dx = qx[planet] - qx[missile_target_id];
+                double m_dy = qy[planet] - qy[missile_target_id];
+                double m_dz = qz[planet] - qz[missile_target_id];
+                double m_dist = sqrt(m_dx*m_dx + m_dy*m_dy + m_dz*m_dz);
+                
+                if ((double)check_step * param::dt * param::missile_speed > m_dist) {
+                    *missile_hit_step_ptr = check_step;
+                }
+            }
+        }
     }
 }
 
@@ -372,9 +405,9 @@ void run_simulation_gpu(int n, int planet, int asteroid,
     if (n <= 64) {
         int blockSize = (n + 31) / 32 * 32;
         if (blockSize < 64) blockSize = 64;
-        if (blockSize > 512) blockSize = 512;
+        if (blockSize > 1024) blockSize = 1024;
         
-        size_t shared_mem_size = 512 * 8 * 7; 
+        size_t shared_mem_size = 1024 * 8 * 7; // Allocate for max supported N
         
         // Optimization: Run all steps in one kernel launch
         // The kernel internally handles stop_flag and breaks loop
@@ -391,6 +424,8 @@ void run_simulation_gpu(int n, int planet, int asteroid,
         int elemBlock = 256;
         int elemGrid = (n + elemBlock - 1) / elemBlock;
         
+        bool can_fuse_check = (planet < 256 && asteroid < 256 && (missile_target_id == -1 || missile_target_id < 256));
+
         for (int step_start = 0; step_start <= max_steps; step_start += BATCH_SIZE) {
             int step_end = std::min(step_start + BATCH_SIZE - 1, max_steps);
             
@@ -403,19 +438,24 @@ void run_simulation_gpu(int n, int planet, int asteroid,
                                       d_ax, d_ay, d_az,
                                       missile_target_id, d_missile_hit_val);
                                       
-                    // 2. Update Motion
+                    // 2. Update Motion (with conditional Fused Check)
                     hipLaunchKernelGGL(update_motion_kernel,
                                       dim3(elemGrid), dim3(elemBlock), 0, 0,
                                       n, d_vx, d_vy, d_vz, d_qx, d_qy, d_qz,
-                                      d_ax, d_ay, d_az);
+                                      d_ax, d_ay, d_az,
+                                      step, planet, asteroid, d_min_dist_val, d_hit_step_val,
+                                      missile_target_id, d_missile_hit_val, d_stop_flag,
+                                      can_fuse_check);
                     
-                    // 3. Check Status (Separate Kernel for Safety)
-                    hipLaunchKernelGGL(check_status_kernel,
-                                      dim3(1), dim3(1), 0, 0,
-                                      n, step, planet, asteroid,
-                                      d_qx, d_qy, d_qz,
-                                      d_min_dist_val, d_hit_step_val,
-                                      missile_target_id, d_missile_hit_val, d_stop_flag);
+                    // 3. Check Status (Separate Kernel only if not fused)
+                    if (!can_fuse_check) {
+                        hipLaunchKernelGGL(check_status_kernel,
+                                          dim3(1), dim3(1), 0, 0,
+                                          n, step, planet, asteroid,
+                                          d_qx, d_qy, d_qz,
+                                          d_min_dist_val, d_hit_step_val,
+                                          missile_target_id, d_missile_hit_val, d_stop_flag);
+                    }
                 } else {
                     hipLaunchKernelGGL(check_status_kernel,
                                       dim3(1), dim3(1), 0, 0,

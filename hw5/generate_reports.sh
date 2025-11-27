@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Configuration
-TEST_CASES=(b20 b30 b40 b50 b60 b70 b80 b90 b100 b200 b512 b1024)
+TEST_CASES=(b40 b50 b60 b70 b80 b90 b100 b200)
 ROOT_DIR=$(pwd)
 HW5_BIN="$ROOT_DIR/hw5"
 REPORT_DIR="$ROOT_DIR/final_reports"
