@@ -1,1 +1,10 @@
 *.tar.gz
+hw5/hw5
+*.o
+*.csv
+*.db
+*.json
+*.log
+hw5/reports/
+hw5/final_reports/
+__pycache__/

@@ -147,7 +147,7 @@ if [ $PROFILE_MODE -eq 0 ]; then
 # Profiling Mode
 else
     echo -e "${BOLD}Running Profiling Mode ...${NC}"
-    TEST_ORDER=(b20 b30 b40 b50 b60 b70 b80 b90 b100 b200 b512 b1024)
+    TEST_ORDER=( b70 b80 b90 b100 b200 b512 b1024)
     
     for test in "${TEST_ORDER[@]}"; do
         echo -e "\n${BOLD}Profiling Test Case: $test${NC}"

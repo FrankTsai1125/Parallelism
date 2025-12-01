@@ -8,6 +8,7 @@
 #include <vector>
 #include <algorithm>
 #include <iostream>
+#include <omp.h>
 
 #define HIP_CHECK(call) \
     do { \
@@ -85,7 +86,11 @@ __global__ void simulation_single_block_kernel(
     double* s_vy = s_vx + n;     double* s_vz = s_vy + n;
     double* s_m  = s_vz + n;
     
+    // Use shared stop flag to avoid global memory polling
+    __shared__ int s_stop;
+    
     int tid = threadIdx.x;
+    if (tid == 0) s_stop = 0;
 
     // Load to Shared Memory
     if (tid < n) {
@@ -96,14 +101,9 @@ __global__ void simulation_single_block_kernel(
     __syncthreads();
 
     for (int s = 0; s < steps_to_run; ++s) {
+        if (s_stop) break;
+
         int step = start_step + s;
-        // Only thread 0 checks stop flag to minimize memory traffic
-        // But we need to broadcast it? No, if thread 0 breaks, others might continue?
-        // Actually, we need all threads to exit. 
-        // But reading global memory every step is expensive.
-        // Let's optimize: only check stop_flag every 100 steps or if we know we wrote to it.
-        // For now, keep it simple but minimal.
-        if (*stop_flag) break;
 
         // 1. Update Mass
         if (tid < n) {
@@ -127,7 +127,6 @@ __global__ void simulation_single_block_kernel(
         }
         
         if (tid < n) {
-            // Unroll loop manually for small N? Compiler -O3 usually does it.
             #pragma unroll 4
             for (int j = 0; j < n; ++j) {
                 if (tid == j) continue;
@@ -167,6 +166,7 @@ __global__ void simulation_single_block_kernel(
             if (*hit_step_ptr == -2 && dist < param::planet_radius) {
                 *hit_step_ptr = check_step;
                 *stop_flag = 1;
+                s_stop = 1;
             }
             
             if (missile_target_id >= 0 && *missile_hit_step_ptr == -1) {
@@ -275,45 +275,12 @@ __global__ void compute_accel_per_particle(
 __global__ void update_motion_kernel(
     int n, double* vx, double* vy, double* vz,
     double* qx, double* qy, double* qz,
-    const double* ax, const double* ay, const double* az,
-    int step, int planet, int asteroid,
-    double* min_dist_ptr, int* hit_step_ptr,
-    int missile_target_id, int* missile_hit_step_ptr, int* stop_flag,
-    bool do_check) 
+    const double* ax, const double* ay, const double* az) 
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) {
         vx[i] += ax[i] * param::dt; vy[i] += ay[i] * param::dt; vz[i] += az[i] * param::dt;
         qx[i] += vx[i] * param::dt; qy[i] += vy[i] * param::dt; qz[i] += vz[i] * param::dt;
-    }
-    
-    if (do_check && blockIdx.x == 0) {
-        __syncthreads(); // Wait for Block 0 updates
-        if (threadIdx.x == 0) {
-            double dx = qx[planet] - qx[asteroid];
-            double dy = qy[planet] - qy[asteroid];
-            double dz = qz[planet] - qz[asteroid];
-            double dist = sqrt(dx*dx + dy*dy + dz*dz);
-            
-            if (dist < *min_dist_ptr) *min_dist_ptr = dist;
-            
-            int check_step = step + 1;
-            if (*hit_step_ptr == -2 && dist < param::planet_radius) {
-                *hit_step_ptr = check_step;
-                *stop_flag = 1;
-            }
-            
-            if (missile_target_id >= 0 && *missile_hit_step_ptr == -1) {
-                double m_dx = qx[planet] - qx[missile_target_id];
-                double m_dy = qy[planet] - qy[missile_target_id];
-                double m_dz = qz[planet] - qz[missile_target_id];
-                double m_dist = sqrt(m_dx*m_dx + m_dy*m_dy + m_dz*m_dz);
-                
-                if ((double)check_step * param::dt * param::missile_speed > m_dist) {
-                    *missile_hit_step_ptr = check_step;
-                }
-            }
-        }
     }
 }
 
@@ -331,12 +298,6 @@ __global__ void check_status_kernel(
         
         if (dist < *min_dist_ptr) *min_dist_ptr = dist;
         
-        // Check Step Logic:
-        // If we are at loop index 'step', and we just updated motion.
-        // The state corresponds to time (step + 1) * dt?
-        // Wait, let's be consistent with Strategy 1.
-        // Strategy 1: check_step = step + 1.
-        // Here we pass 'step'. So we should use step + 1.
         int check_step = step + 1;
         
         if (*hit_step_ptr == -2 && dist < param::planet_radius) {
@@ -357,12 +318,127 @@ __global__ void check_status_kernel(
     }
 }
 
+void run_simulation_cpu(int n, int planet, int asteroid,
+    std::vector<double>& qx, std::vector<double>& qy, std::vector<double>& qz,
+    std::vector<double>& vx, std::vector<double>& vy, std::vector<double>& vz,
+    const std::vector<double>& m_in, const std::vector<int>& type,
+    int max_steps, double& min_dist, int& hit_time_step,
+    int missile_target_id = -1, int* missile_hit_step = nullptr) {
+
+    std::vector<double> m = m_in;
+    double min_dist_val = std::numeric_limits<double>::infinity();
+    int hit_step_val = -2;
+    int missile_hit_val = -1;
+    if (missile_hit_step) *missile_hit_step = -1;
+
+    bool stop = false;
+
+    // Allocate temporary force arrays outside parallel region
+    std::vector<double> fx(n), fy(n), fz(n);
+
+    // CPU Simulation Loop Optimized with OpenMP Outer Parallel
+    #pragma omp parallel
+    {
+        for (int step = 0; step < max_steps; ++step) {
+            #pragma omp barrier
+            if (stop) break;
+            
+            // 1. Update Mass
+            #pragma omp single
+            {
+                double t = (double)(step + 1) * param::dt;
+                for (int i = 0; i < n; ++i) {
+                    if (type[i] == 1) {
+                        m[i] = param::gravity_device_mass(m_in[i], t);
+                    }
+                    if (missile_target_id >= 0 && missile_hit_val != -1 && missile_hit_val < (step + 1)) {
+                        if (i == missile_target_id) m[i] = 0.0;
+                    }
+                }
+            }
+            // Implicit barrier
+
+            // 2. Force Calculation
+            #pragma omp for schedule(static)
+            for (int i = 0; i < n; ++i) {
+                double my_fx = 0.0, my_fy = 0.0, my_fz = 0.0;
+                double qxi = qx[i], qyi = qy[i], qzi = qz[i];
+                
+                for (int j = 0; j < n; ++j) {
+                    if (i == j) continue;
+                    double dx = qx[j] - qxi;
+                    double dy = qy[j] - qyi;
+                    double dz = qz[j] - qzi;
+                    double dist2 = dx*dx + dy*dy + dz*dz + param::eps2;
+                    double dist = std::sqrt(dist2);
+                    double f = param::G * m[j] / (dist2 * dist);
+                    my_fx += f * dx; my_fy += f * dy; my_fz += f * dz;
+                }
+                
+                fx[i] = my_fx; fy[i] = my_fy; fz[i] = my_fz;
+            }
+            // Implicit barrier ensures all forces are calculated before motion update
+
+            // 3. Update Motion
+            #pragma omp for schedule(static)
+            for (int i = 0; i < n; ++i) {
+                double new_vx = vx[i] + fx[i] * param::dt;
+                double new_vy = vy[i] + fy[i] * param::dt;
+                double new_vz = vz[i] + fz[i] * param::dt;
+                
+                vx[i] = new_vx; vy[i] = new_vy; vz[i] = new_vz;
+                qx[i] += new_vx * param::dt;
+                qy[i] += new_vy * param::dt;
+                qz[i] += new_vz * param::dt;
+            }
+            // Implicit barrier
+
+            // 4. Check Status
+            #pragma omp single
+            {
+                double dx = qx[planet] - qx[asteroid];
+                double dy = qy[planet] - qy[asteroid];
+                double dz = qz[planet] - qz[asteroid];
+                double dist = std::sqrt(dx*dx + dy*dy + dz*dz);
+                
+                if (dist < min_dist_val) min_dist_val = dist;
+                
+                if (hit_step_val == -2 && dist < param::planet_radius) {
+                    hit_step_val = step + 1;
+                    stop = true;
+                }
+                
+                if (missile_target_id >= 0 && missile_hit_val == -1) {
+                    double m_dx = qx[planet] - qx[missile_target_id];
+                    double m_dy = qy[planet] - qy[missile_target_id];
+                    double m_dz = qz[planet] - qz[missile_target_id];
+                    double m_dist = std::sqrt(m_dx*m_dx + m_dy*m_dy + m_dz*m_dz);
+                    
+                    if ((double)(step + 1) * param::dt * param::missile_speed > m_dist) {
+                        missile_hit_val = step + 1;
+                        if (missile_hit_step) *missile_hit_step = missile_hit_val;
+                    }
+                }
+            }
+            // Implicit barrier
+        }
+    }
+    
+    min_dist = min_dist_val;
+    hit_time_step = hit_step_val;
+}
+
 void run_simulation_gpu(int n, int planet, int asteroid,
     std::vector<double>& qx, std::vector<double>& qy, std::vector<double>& qz,
     std::vector<double>& vx, std::vector<double>& vy, std::vector<double>& vz,
     const std::vector<double>& m_in, const std::vector<int>& type,
     int max_steps, double& min_dist, int& hit_time_step,
     int missile_target_id = -1, int* missile_hit_step = nullptr) {
+    
+    if (n <= 64) {
+        run_simulation_cpu(n, planet, asteroid, qx, qy, qz, vx, vy, vz, m_in, type, max_steps, min_dist, hit_time_step, missile_target_id, missile_hit_step);
+        return;
+    }
     
     double *d_qx, *d_qy, *d_qz, *d_vx, *d_vy, *d_vz, *d_m;
     double *d_ax, *d_ay, *d_az;
@@ -402,15 +478,18 @@ void run_simulation_gpu(int n, int planet, int asteroid,
     HIP_CHECK(hipMemcpy(d_missile_hit_val, &init_missile_hit, sizeof(int), hipMemcpyHostToDevice));
     HIP_CHECK(hipMemcpy(d_stop_flag, &init_stop, sizeof(int), hipMemcpyHostToDevice));
     
-    if (n <= 64) {
+    // Strategy threshold reverted to 64. 
+    // Single block kernel is effectively unused unless CPU limit is lowered, 
+    // but kept for potential future use if CPU overhead becomes high for slightly larger N.
+    // Actually, let's keep the code structure clean.
+    
+    if (n <= 64) { // Should not happen due to early return, but for completeness
         int blockSize = (n + 31) / 32 * 32;
         if (blockSize < 64) blockSize = 64;
         if (blockSize > 1024) blockSize = 1024;
         
-        size_t shared_mem_size = 1024 * 8 * 7; // Allocate for max supported N
+        size_t shared_mem_size = 1024 * 8 * 7; 
         
-        // Optimization: Run all steps in one kernel launch
-        // The kernel internally handles stop_flag and breaks loop
         hipLaunchKernelGGL(simulation_single_block_kernel, 
                           dim3(1), dim3(blockSize), shared_mem_size, 0,
                           n, 0, max_steps,
@@ -424,38 +503,28 @@ void run_simulation_gpu(int n, int planet, int asteroid,
         int elemBlock = 256;
         int elemGrid = (n + elemBlock - 1) / elemBlock;
         
-        bool can_fuse_check = (planet < 256 && asteroid < 256 && (missile_target_id == -1 || missile_target_id < 256));
-
         for (int step_start = 0; step_start <= max_steps; step_start += BATCH_SIZE) {
             int step_end = std::min(step_start + BATCH_SIZE - 1, max_steps);
             
             for (int step = step_start; step <= step_end; step++) {
                 if (step > 0) {
-                    // 1. Compute Acceleration (Inline Mass & Hit Logic)
                     hipLaunchKernelGGL(compute_accel_per_particle, 
                                       dim3(gridN), dim3(256), 0, 0,
                                       n, d_qx, d_qy, d_qz, d_m, d_type, (double)step * param::dt,
                                       d_ax, d_ay, d_az,
                                       missile_target_id, d_missile_hit_val);
                                       
-                    // 2. Update Motion (with conditional Fused Check)
                     hipLaunchKernelGGL(update_motion_kernel,
                                       dim3(elemGrid), dim3(elemBlock), 0, 0,
                                       n, d_vx, d_vy, d_vz, d_qx, d_qy, d_qz,
-                                      d_ax, d_ay, d_az,
-                                      step, planet, asteroid, d_min_dist_val, d_hit_step_val,
-                                      missile_target_id, d_missile_hit_val, d_stop_flag,
-                                      can_fuse_check);
+                                      d_ax, d_ay, d_az);
                     
-                    // 3. Check Status (Separate Kernel only if not fused)
-                    if (!can_fuse_check) {
-                        hipLaunchKernelGGL(check_status_kernel,
-                                          dim3(1), dim3(1), 0, 0,
-                                          n, step, planet, asteroid,
-                                          d_qx, d_qy, d_qz,
-                                          d_min_dist_val, d_hit_step_val,
-                                          missile_target_id, d_missile_hit_val, d_stop_flag);
-                    }
+                    hipLaunchKernelGGL(check_status_kernel,
+                                      dim3(1), dim3(1), 0, 0,
+                                      n, step, planet, asteroid,
+                                      d_qx, d_qy, d_qz,
+                                      d_min_dist_val, d_hit_step_val,
+                                      missile_target_id, d_missile_hit_val, d_stop_flag);
                 } else {
                     hipLaunchKernelGGL(check_status_kernel,
                                       dim3(1), dim3(1), 0, 0,
@@ -467,6 +536,7 @@ void run_simulation_gpu(int n, int planet, int asteroid,
             }
             
             int stop;
+         
             HIP_CHECK(hipMemcpy(&stop, d_stop_flag, sizeof(int), hipMemcpyDeviceToHost));
             if (stop) break;
         }
@@ -543,7 +613,18 @@ int main(int argc, char** argv) {
             int best_device = -1;
             const double cost_eps = 1e-6;
             
-            for (int device_id : devices) {
+            int num_gpus = 0;
+            HIP_CHECK(hipGetDeviceCount(&num_gpus));
+            if (num_gpus < 1) num_gpus = 1;
+            
+            #pragma omp parallel for schedule(dynamic) num_threads(num_gpus)
+            for (int k = 0; k < devices.size(); ++k) {
+                int device_id = devices[k];
+                
+                int tid = omp_get_thread_num();
+                int gpu_id = tid % num_gpus;
+                HIP_CHECK(hipSetDevice(gpu_id));
+                
                 std::vector<double> qx_test = base_qx, qy_test = base_qy, qz_test = base_qz;
                 std::vector<double> vx_test = base_vx, vy_test = base_vy, vz_test = base_vz;
                 std::vector<double> m_test = base_m;
@@ -557,6 +638,8 @@ int main(int argc, char** argv) {
                                   param::n_steps, test_min_dist, test_hit,
                                   device_id, &missile_hit);
                 
+                #pragma omp critical
+                {
                 if (test_hit == -2 && missile_hit >= 0) {
                     double cost = param::get_missile_cost(missile_hit * param::dt);
                     if (cost < best_cost - cost_eps ||
@@ -564,6 +647,7 @@ int main(int argc, char** argv) {
                          (best_device == -1 || device_id < best_device))) {
                         best_cost = cost;
                         best_device = device_id;
+                        }
                     }
                 }
             }
