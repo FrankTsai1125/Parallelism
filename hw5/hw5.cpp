@@ -478,68 +478,47 @@ void run_simulation_gpu(int n, int planet, int asteroid,
     HIP_CHECK(hipMemcpy(d_missile_hit_val, &init_missile_hit, sizeof(int), hipMemcpyHostToDevice));
     HIP_CHECK(hipMemcpy(d_stop_flag, &init_stop, sizeof(int), hipMemcpyHostToDevice));
     
-    // Strategy threshold reverted to 64. 
-    // Single block kernel is effectively unused unless CPU limit is lowered, 
-    // but kept for potential future use if CPU overhead becomes high for slightly larger N.
-    // Actually, let's keep the code structure clean.
+    const int BATCH_SIZE = 500; 
+    int gridN = n;
+    int elemBlock = 256;
+    int elemGrid = (n + elemBlock - 1) / elemBlock;
     
-    if (n <= 64) { // Should not happen due to early return, but for completeness
-        int blockSize = (n + 31) / 32 * 32;
-        if (blockSize < 64) blockSize = 64;
-        if (blockSize > 1024) blockSize = 1024;
+    for (int step_start = 0; step_start <= max_steps; step_start += BATCH_SIZE) {
+        int step_end = std::min(step_start + BATCH_SIZE - 1, max_steps);
         
-        size_t shared_mem_size = 1024 * 8 * 7; 
-        
-        hipLaunchKernelGGL(simulation_single_block_kernel, 
-                          dim3(1), dim3(blockSize), shared_mem_size, 0,
-                          n, 0, max_steps,
-                          planet, asteroid, missile_target_id,
-                          d_qx, d_qy, d_qz, d_vx, d_vy, d_vz, d_m, d_type, 
-                          d_min_dist_val, d_hit_step_val, d_missile_hit_val, d_stop_flag);
-    } 
-    else {
-        const int BATCH_SIZE = 500; 
-        int gridN = n;
-        int elemBlock = 256;
-        int elemGrid = (n + elemBlock - 1) / elemBlock;
-        
-        for (int step_start = 0; step_start <= max_steps; step_start += BATCH_SIZE) {
-            int step_end = std::min(step_start + BATCH_SIZE - 1, max_steps);
-            
-            for (int step = step_start; step <= step_end; step++) {
-                if (step > 0) {
-                    hipLaunchKernelGGL(compute_accel_per_particle, 
-                                      dim3(gridN), dim3(256), 0, 0,
-                                      n, d_qx, d_qy, d_qz, d_m, d_type, (double)step * param::dt,
-                                      d_ax, d_ay, d_az,
-                                      missile_target_id, d_missile_hit_val);
-                                      
-                    hipLaunchKernelGGL(update_motion_kernel,
-                                      dim3(elemGrid), dim3(elemBlock), 0, 0,
-                                      n, d_vx, d_vy, d_vz, d_qx, d_qy, d_qz,
-                                      d_ax, d_ay, d_az);
-                    
-                    hipLaunchKernelGGL(check_status_kernel,
-                                      dim3(1), dim3(1), 0, 0,
-                                      n, step, planet, asteroid,
-                                      d_qx, d_qy, d_qz,
-                                      d_min_dist_val, d_hit_step_val,
-                                      missile_target_id, d_missile_hit_val, d_stop_flag);
-                } else {
-                    hipLaunchKernelGGL(check_status_kernel,
-                                      dim3(1), dim3(1), 0, 0,
-                                      n, step, planet, asteroid,
-                                      d_qx, d_qy, d_qz,
-                                      d_min_dist_val, d_hit_step_val,
-                                      missile_target_id, d_missile_hit_val, d_stop_flag);
-                }
+        for (int step = step_start; step <= step_end; step++) {
+            if (step > 0) {
+                hipLaunchKernelGGL(compute_accel_per_particle, 
+                                  dim3(gridN), dim3(256), 0, 0,
+                                  n, d_qx, d_qy, d_qz, d_m, d_type, (double)step * param::dt,
+                                  d_ax, d_ay, d_az,
+                                  missile_target_id, d_missile_hit_val);
+                                  
+                hipLaunchKernelGGL(update_motion_kernel,
+                                  dim3(elemGrid), dim3(elemBlock), 0, 0,
+                                  n, d_vx, d_vy, d_vz, d_qx, d_qy, d_qz,
+                                  d_ax, d_ay, d_az);
+                
+                hipLaunchKernelGGL(check_status_kernel,
+                                  dim3(1), dim3(1), 0, 0,
+                                  n, step, planet, asteroid,
+                                  d_qx, d_qy, d_qz,
+                                  d_min_dist_val, d_hit_step_val,
+                                  missile_target_id, d_missile_hit_val, d_stop_flag);
+            } else {
+                hipLaunchKernelGGL(check_status_kernel,
+                                  dim3(1), dim3(1), 0, 0,
+                                  n, step, planet, asteroid,
+                                  d_qx, d_qy, d_qz,
+                                  d_min_dist_val, d_hit_step_val,
+                                  missile_target_id, d_missile_hit_val, d_stop_flag);
             }
-            
-            int stop;
-         
-            HIP_CHECK(hipMemcpy(&stop, d_stop_flag, sizeof(int), hipMemcpyDeviceToHost));
-            if (stop) break;
         }
+        
+        int stop;
+     
+        HIP_CHECK(hipMemcpy(&stop, d_stop_flag, sizeof(int), hipMemcpyDeviceToHost));
+        if (stop) break;
     }
     
     HIP_CHECK(hipMemcpy(&min_dist, d_min_dist_val, sizeof(double), hipMemcpyDeviceToHost));
@@ -640,13 +619,13 @@ int main(int argc, char** argv) {
                 
                 #pragma omp critical
                 {
-                if (test_hit == -2 && missile_hit >= 0) {
-                    double cost = param::get_missile_cost(missile_hit * param::dt);
-                    if (cost < best_cost - cost_eps ||
-                        (std::abs(cost - best_cost) <= cost_eps && 
-                         (best_device == -1 || device_id < best_device))) {
-                        best_cost = cost;
-                        best_device = device_id;
+                    if (test_hit == -2 && missile_hit >= 0) {
+                        double cost = param::get_missile_cost(missile_hit * param::dt);
+                        if (cost < best_cost - cost_eps ||
+                            (std::abs(cost - best_cost) <= cost_eps && 
+                             (best_device == -1 || device_id < best_device))) {
+                            best_cost = cost;
+                            best_device = device_id;
                         }
                     }
                 }
