@@ -12,13 +12,12 @@ It is designed to match your `machine.txt` environment (Tesla V100, **compute ca
 From `Lab 3 GPU Cluster.pdf`: login node is `ln01.twcc.ai`, **compile and submit on login node**, and run via:
 
 ```bash
-srun -N 1 -n 1 --gpus-per-node 1 -A ACD114118 -t 1 ./hello_world
+srun -N 1 -n 1 --gpus-per-node 1 -A ACD114118 -t 1 ./your_executable [args]
 ```
 
-This repo includes:
+This repo includes a helper script:
 
-- `hello_world.cu` (sanity check program)
-- `run_srun.sh` (compiles + submits using the required `srun` flags)
+- `run_srun.sh` (loads `cuda` module, compiles `mc_pricer.cu`, and submits with the required `srun` flags)
 
 ### Build (Linux / cluster node with CUDA)
 

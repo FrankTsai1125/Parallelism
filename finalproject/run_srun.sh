@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -e
+set -o pipefail
 
 # Taiwania2 (Lab 3) workflow:
 # - Compile ONLY on login node (ln01.twcc.ai)
@@ -7,20 +8,34 @@ set -euo pipefail
 #
 # Usage:
 #   bash run_srun.sh
+#   bash run_srun.sh -- --type european --paths 5000000 --steps 252
 #
-# You can tweak TIME/PATHS/etc. below as needed.
+# Notes:
+# - Do NOT use `set -u` (nounset) here: `module load` scripts may reference
+#   SLURM_* env vars (like SLURM_JOBID) that are intentionally unset on login nodes.
 
 PROJECT_ID="ACD114118"
 TIME_MIN="1"
 GPUS_PER_NODE="1"
 
+SRC="mc_pricer.cu"
+EXE="mc_pricer"
+NVCC_FLAGS=(-O3 -std=c++17 -arch=sm_70)
+
+# Pass everything after `--` to the executable.
+RUN_ARGS=()
+if [[ "${1:-}" == "--" ]]; then
+  shift
+  RUN_ARGS=("$@")
+fi
+
 echo "[1/3] Loading CUDA module..."
 module load cuda
 
-echo "[2/3] Compiling hello_world..."
-nvcc -O2 -std=c++17 -arch=sm_70 hello_world.cu -o hello_world
+echo "[2/3] Compiling ${SRC} -> ${EXE} ..."
+nvcc "${NVCC_FLAGS[@]}" "${SRC}" -o "${EXE}"
 
 echo "[3/3] Submitting job via srun (1 node, 1 task, 1 GPU)..."
-srun -N 1 -n 1 --gpus-per-node "${GPUS_PER_NODE}" -A "${PROJECT_ID}" -t "${TIME_MIN}" ./hello_world
+srun -N 1 -n 1 --gpus-per-node "${GPUS_PER_NODE}" -A "${PROJECT_ID}" -t "${TIME_MIN}" "./${EXE}" "${RUN_ARGS[@]}"
 
 
