@@ -1,4 +1,4 @@
-// Monte Carlo option pricing (European / Asian) on NVIDIA Tesla V100 (sm_70).
+// Monte Carlo option pricing (European / Asian / Basket) on NVIDIA Tesla V100 (sm_70).
 // - Uses cuRAND (Philox) for RNG
 // - Each thread simulates independent price paths (embarrassingly parallel)
 // - Outputs estimated price + standard error
@@ -9,6 +9,7 @@
 // Run:
 //   ./mc_pricer --paths 5000000 --steps 252 --type european
 //   ./mc_pricer --paths 5000000 --steps 252 --type asian
+//   ./mc_pricer --paths 2000000 --steps 252 --type basket --assets 16 --rho 0.3
 //
 // Notes from machine.txt:
 // - Tesla V100-SXM2-32GB, compute capability 7.0 => use -arch=sm_70
@@ -22,9 +23,11 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <random>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -40,7 +43,7 @@
     }                                                                          \
   } while (0)
 
-enum class OptionType { EuropeanCall, AsianArithmeticCall };
+enum class OptionType { EuropeanCall, AsianArithmeticCall, BasketEuropeanCall };
 
 struct Params {
   double S0 = 100.0;
@@ -52,13 +55,23 @@ struct Params {
   std::int64_t paths = 5'000'000;
   OptionType type = OptionType::EuropeanCall;
   std::uint64_t seed = 1234;
+
+  // Multi-asset (for basket). assets=1 keeps the original single-asset model.
+  int assets = 1;
+  double rho = 0.0; // equicorrelation off-diagonal correlation
+
+  // GPU tuning knobs (to "make GPU busier" by increasing active threads/blocks).
+  int block_size = 256;
+  int blocks_per_sm = 8;
+  int device = -1; // -1 => auto (use SLURM_LOCALID if present, else 0)
 };
 
 static void usage(const char* argv0) {
   std::cerr
       << "Usage: " << argv0
-      << " [--type european|asian] [--S0 N] [--K N] [--r N] [--sigma N] [--T N]\n"
-      << "           [--steps N] [--paths N] [--seed N] [--cpu]\n";
+      << " [--type european|asian|basket] [--S0 N] [--K N] [--r N] [--sigma N] [--T N]\n"
+      << "           [--steps N] [--paths N] [--seed N] [--assets N] [--rho R]\n"
+      << "           [--block-size N] [--blocks-per-sm N] [--device N] [--cpu]\n";
 }
 
 static bool parse_args(int argc, char** argv, Params& p, bool& run_cpu) {
@@ -77,6 +90,7 @@ static bool parse_args(int argc, char** argv, Params& p, bool& run_cpu) {
       if (!v) return false;
       if (std::strcmp(v, "european") == 0) p.type = OptionType::EuropeanCall;
       else if (std::strcmp(v, "asian") == 0) p.type = OptionType::AsianArithmeticCall;
+      else if (std::strcmp(v, "basket") == 0) p.type = OptionType::BasketEuropeanCall;
       else {
         std::cerr << "Unknown --type: " << v << "\n";
         return false;
@@ -105,6 +119,21 @@ static bool parse_args(int argc, char** argv, Params& p, bool& run_cpu) {
     } else if (std::strcmp(argv[i], "--seed") == 0) {
       const char* v = next("--seed"); if (!v) return false;
       p.seed = static_cast<std::uint64_t>(std::stoull(v));
+    } else if (std::strcmp(argv[i], "--assets") == 0) {
+      const char* v = next("--assets"); if (!v) return false;
+      p.assets = std::stoi(v);
+    } else if (std::strcmp(argv[i], "--rho") == 0) {
+      const char* v = next("--rho"); if (!v) return false;
+      p.rho = std::stod(v);
+    } else if (std::strcmp(argv[i], "--block-size") == 0) {
+      const char* v = next("--block-size"); if (!v) return false;
+      p.block_size = std::stoi(v);
+    } else if (std::strcmp(argv[i], "--blocks-per-sm") == 0) {
+      const char* v = next("--blocks-per-sm"); if (!v) return false;
+      p.blocks_per_sm = std::stoi(v);
+    } else if (std::strcmp(argv[i], "--device") == 0) {
+      const char* v = next("--device"); if (!v) return false;
+      p.device = std::stoi(v);
     } else if (std::strcmp(argv[i], "--cpu") == 0) {
       run_cpu = true;
     } else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
@@ -114,20 +143,77 @@ static bool parse_args(int argc, char** argv, Params& p, bool& run_cpu) {
       return false;
     }
   }
-  if (p.steps <= 0 || p.paths <= 0 || p.T <= 0.0 || p.sigma < 0.0) {
+  if (p.steps <= 0 || p.paths <= 0 || p.T <= 0.0 || p.sigma < 0.0 || p.assets <= 0) {
     std::cerr << "Invalid parameters.\n";
     return false;
+  }
+  if (p.block_size <= 0 || p.blocks_per_sm <= 0) {
+    std::cerr << "Invalid GPU launch parameters.\n";
+    return false;
+  }
+  if (p.type == OptionType::AsianArithmeticCall && p.assets != 1) {
+    std::cerr << "Asian option is currently implemented for assets=1 only.\n";
+    return false;
+  }
+  if (p.type == OptionType::BasketEuropeanCall && p.assets < 2) {
+    // allow assets=1 but it's identical to european; warn by allowing it.
   }
   return true;
 }
 
+static int env_int(const char* name, int fallback) {
+  const char* v = std::getenv(name);
+  if (!v || !*v) return fallback;
+  try {
+    return std::stoi(v);
+  } catch (...) {
+    return fallback;
+  }
+}
+
+static std::vector<double> make_equicorr_matrix(int n, double rho) {
+  std::vector<double> A(static_cast<std::size_t>(n) * static_cast<std::size_t>(n), 0.0);
+  for (int i = 0; i < n; ++i) {
+    for (int j = 0; j < n; ++j) {
+      A[static_cast<std::size_t>(i) * n + j] = (i == j) ? 1.0 : rho;
+    }
+  }
+  return A;
+}
+
+// Simple CPU Cholesky (lower-triangular) for SPD matrices.
+static std::vector<double> cholesky_lower(const std::vector<double>& A, int n) {
+  std::vector<double> L(static_cast<std::size_t>(n) * static_cast<std::size_t>(n), 0.0);
+  for (int i = 0; i < n; ++i) {
+    for (int j = 0; j <= i; ++j) {
+      double sum = A[static_cast<std::size_t>(i) * n + j];
+      for (int k = 0; k < j; ++k) {
+        sum -= L[static_cast<std::size_t>(i) * n + k] * L[static_cast<std::size_t>(j) * n + k];
+      }
+      if (i == j) {
+        if (sum <= 0.0) {
+          throw std::runtime_error("Cholesky failed: matrix not SPD (try different rho/assets).");
+        }
+        L[static_cast<std::size_t>(i) * n + j] = std::sqrt(sum);
+      } else {
+        L[static_cast<std::size_t>(i) * n + j] = sum / L[static_cast<std::size_t>(j) * n + j];
+      }
+    }
+  }
+  return L;
+}
+
 // ----------------------------- GPU implementation -----------------------------
+
+static constexpr int MAX_ASSETS = 32;
 
 __global__ void mc_kernel(
     std::int64_t paths,
     int steps,
     double S0, double K, double r, double sigma, double T,
-    int opt_type, // 0: EuropeanCall, 1: AsianArithmeticCall
+    int opt_type, // 0: EuropeanCall, 1: AsianArithmeticCall, 2: BasketEuropeanCall
+    int assets,
+    const double* __restrict__ chol_L, // assets x assets, lower-triangular (row-major); null if assets==1
     std::uint64_t seed,
     double* sum_payoff,
     double* sum_sq_payoff) {
@@ -150,41 +236,90 @@ __global__ void mc_kernel(
   double local_sum_sq = 0.0;
 
   for (std::int64_t path = tid; path < paths; path += stride) {
-    double S = S0;
-    double avgS = 0.0;
+    if (assets <= 1) {
+      double S = S0;
+      double avgS = 0.0;
 
-    // Generate normals in batches of 4 for better throughput.
-    int j = 0;
-    for (; j + 4 <= steps; j += 4) {
-      float4 z = curand_normal4(&st);
-      // step 0
-      S *= std::exp(drift + vol * static_cast<double>(z.x));
-      if (opt_type == 1) avgS += S;
-      // step 1
-      S *= std::exp(drift + vol * static_cast<double>(z.y));
-      if (opt_type == 1) avgS += S;
-      // step 2
-      S *= std::exp(drift + vol * static_cast<double>(z.z));
-      if (opt_type == 1) avgS += S;
-      // step 3
-      S *= std::exp(drift + vol * static_cast<double>(z.w));
-      if (opt_type == 1) avgS += S;
-    }
-    for (; j < steps; ++j) {
-      float z = curand_normal(&st);
-      S *= std::exp(drift + vol * static_cast<double>(z));
-      if (opt_type == 1) avgS += S;
+      // Generate normals in batches of 4 for better throughput.
+      int j = 0;
+      for (; j + 4 <= steps; j += 4) {
+        float4 z = curand_normal4(&st);
+        // step 0
+        S *= std::exp(drift + vol * static_cast<double>(z.x));
+        if (opt_type == 1) avgS += S;
+        // step 1
+        S *= std::exp(drift + vol * static_cast<double>(z.y));
+        if (opt_type == 1) avgS += S;
+        // step 2
+        S *= std::exp(drift + vol * static_cast<double>(z.z));
+        if (opt_type == 1) avgS += S;
+        // step 3
+        S *= std::exp(drift + vol * static_cast<double>(z.w));
+        if (opt_type == 1) avgS += S;
+      }
+      for (; j < steps; ++j) {
+        float z = curand_normal(&st);
+        S *= std::exp(drift + vol * static_cast<double>(z));
+        if (opt_type == 1) avgS += S;
+      }
+
+      double payoff = 0.0;
+      if (opt_type == 0 || opt_type == 2) {
+        payoff = fmax(S - K, 0.0);
+      } else {
+        const double meanS = avgS / static_cast<double>(steps);
+        payoff = fmax(meanS - K, 0.0);
+      }
+      payoff *= disc;
+
+      local_sum += payoff;
+      local_sum_sq += payoff * payoff;
+      continue;
     }
 
-    double payoff = 0.0;
-    if (opt_type == 0) {
-      // std::max is host-only in many nvcc configs; use device-friendly max.
-      payoff = fmax(S - K, 0.0);
-    } else {
-      const double meanS = avgS / static_cast<double>(steps);
-      payoff = fmax(meanS - K, 0.0);
+    // Multi-asset basket (terminal arithmetic mean across assets).
+    double Svec[MAX_ASSETS];
+    for (int a = 0; a < assets; ++a) Svec[a] = S0;
+
+    // Temporary vectors.
+    double zvec[MAX_ASSETS];
+    double yvec[MAX_ASSETS];
+
+    for (int t = 0; t < steps; ++t) {
+      // Generate independent normals z.
+      int a = 0;
+      for (; a + 4 <= assets; a += 4) {
+        float4 z = curand_normal4(&st);
+        zvec[a + 0] = static_cast<double>(z.x);
+        zvec[a + 1] = static_cast<double>(z.y);
+        zvec[a + 2] = static_cast<double>(z.z);
+        zvec[a + 3] = static_cast<double>(z.w);
+      }
+      for (; a < assets; ++a) {
+        zvec[a] = static_cast<double>(curand_normal(&st));
+      }
+
+      // Correlate: y = L * z (L is lower triangular).
+      for (int i = 0; i < assets; ++i) {
+        double acc = 0.0;
+        const int row = i * assets;
+        for (int k = 0; k <= i; ++k) {
+          acc += chol_L[row + k] * zvec[k];
+        }
+        yvec[i] = acc;
+      }
+
+      // Update each asset.
+      for (int i = 0; i < assets; ++i) {
+        Svec[i] *= std::exp(drift + vol * yvec[i]);
+      }
     }
-    payoff *= disc;
+
+    double basket = 0.0;
+    for (int i = 0; i < assets; ++i) basket += Svec[i];
+    basket /= static_cast<double>(assets);
+
+    double payoff = fmax(basket - K, 0.0) * disc;
 
     local_sum += payoff;
     local_sum_sq += payoff * payoff;
@@ -218,14 +353,42 @@ static MCResult run_gpu(const Params& p) {
   CUDA_CHECK(cudaGetDevice(&device));
   CUDA_CHECK(cudaGetDeviceProperties(&prop, device));
 
-  // V100: 80 SM. A reasonable default is a few blocks per SM.
-  const int block = 256;
-  const int blocks = std::min(80 * 8, 65535); // cap gridDim.x
+  // Optional multi-asset Cholesky matrix on device.
+  double* d_L = nullptr;
+  std::vector<double> h_L;
+  if (p.assets > 1) {
+    if (p.assets > MAX_ASSETS) {
+      std::cerr << "assets too large (max " << MAX_ASSETS << ")\n";
+      std::exit(1);
+    }
+    // Equicorrelation matrix is SPD only if rho in (-1/(n-1), 1).
+    const double lower = -1.0 / static_cast<double>(p.assets - 1);
+    if (!(p.rho > lower && p.rho < 1.0)) {
+      std::cerr << "Invalid rho for equicorrelation SPD: require rho in (" << lower << ", 1)\n";
+      std::exit(1);
+    }
+    try {
+      auto A = make_equicorr_matrix(p.assets, p.rho);
+      h_L = cholesky_lower(A, p.assets);
+    } catch (const std::exception& e) {
+      std::cerr << "Cholesky error: " << e.what() << "\n";
+      std::exit(1);
+    }
+    CUDA_CHECK(cudaMalloc(&d_L, sizeof(double) * static_cast<std::size_t>(p.assets) * static_cast<std::size_t>(p.assets)));
+    CUDA_CHECK(cudaMemcpy(d_L, h_L.data(),
+                          sizeof(double) * static_cast<std::size_t>(p.assets) * static_cast<std::size_t>(p.assets),
+                          cudaMemcpyHostToDevice));
+  }
+
+  const int block = p.block_size;
+  const int blocks = std::min(prop.multiProcessorCount * p.blocks_per_sm, 65535); // cap gridDim.x
 
   CUDA_CHECK(cudaEventRecord(start));
   mc_kernel<<<blocks, block>>>(
       p.paths, p.steps, p.S0, p.K, p.r, p.sigma, p.T,
-      (p.type == OptionType::EuropeanCall) ? 0 : 1,
+      (p.type == OptionType::EuropeanCall) ? 0 : (p.type == OptionType::AsianArithmeticCall ? 1 : 2),
+      p.assets,
+      d_L,
       p.seed, d_sum, d_sum_sq);
   CUDA_CHECK(cudaGetLastError());
   CUDA_CHECK(cudaEventRecord(stop));
@@ -242,6 +405,7 @@ static MCResult run_gpu(const Params& p) {
   CUDA_CHECK(cudaEventDestroy(stop));
   CUDA_CHECK(cudaFree(d_sum));
   CUDA_CHECK(cudaFree(d_sum_sq));
+  if (d_L) CUDA_CHECK(cudaFree(d_L));
 
   const double n = static_cast<double>(p.paths);
   const double mean = h_sum / n;
@@ -316,11 +480,23 @@ int main(int argc, char** argv) {
     return 2;
   }
 
+  // If launched via Slurm with multiple tasks, bind each task to its local GPU.
+  // Taiwania2 nodes have 8x V100, so you can use --gpus-per-node 8 and --ntasks-per-node 8.
+  const int local_id = env_int("SLURM_LOCALID", -1);
+  const int proc_id = env_int("SLURM_PROCID", 0);
+
   std::cout << std::fixed << std::setprecision(6);
-  std::cout << "Option: " << ((p.type == OptionType::EuropeanCall) ? "EuropeanCall" : "AsianArithmeticCall") << "\n";
+  std::cout << "Option: "
+            << ((p.type == OptionType::EuropeanCall)
+                    ? "EuropeanCall"
+                    : (p.type == OptionType::AsianArithmeticCall ? "AsianArithmeticCall" : "BasketEuropeanCall"))
+            << "\n";
   std::cout << "Params: S0=" << p.S0 << " K=" << p.K << " r=" << p.r
             << " sigma=" << p.sigma << " T=" << p.T
-            << " steps=" << p.steps << " paths=" << p.paths << "\n";
+            << " steps=" << p.steps << " paths=" << p.paths
+            << " assets=" << p.assets << " rho=" << p.rho
+            << " block_size=" << p.block_size << " blocks_per_sm=" << p.blocks_per_sm
+            << "\n";
 
   // GPU run (primary)
   int device_count = 0;
@@ -330,9 +506,25 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  int chosen_device = 0;
+  if (p.device >= 0) {
+    chosen_device = p.device;
+  } else if (local_id >= 0) {
+    chosen_device = local_id;
+  }
+  chosen_device = ((chosen_device % device_count) + device_count) % device_count;
+  CUDA_CHECK(cudaSetDevice(chosen_device));
+
   cudaDeviceProp prop{};
-  CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
-  std::cout << "GPU: " << prop.name << " (cc " << prop.major << "." << prop.minor << ")\n";
+  CUDA_CHECK(cudaGetDeviceProperties(&prop, chosen_device));
+  std::cout << "GPU: " << prop.name << " (cc " << prop.major << "." << prop.minor << ")"
+            << " device=" << chosen_device;
+  if (local_id >= 0) std::cout << " SLURM_LOCALID=" << local_id;
+  if (proc_id >= 0) std::cout << " SLURM_PROCID=" << proc_id;
+  std::cout << "\n";
+
+  // Make seeds different across Slurm tasks (useful for multi-GPU runs without identical RNG streams).
+  p.seed = p.seed ^ (0x9E3779B97F4A7C15ULL * static_cast<std::uint64_t>(proc_id + 1));
 
   MCResult g = run_gpu(p);
   std::cout << "[GPU] price=" << g.price << "  std_error=" << g.std_error
