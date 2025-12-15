@@ -1,0 +1,100 @@
+
+
+===== PAGE 1/12 =====
+Lab 3
+GPU Cluster
+Parallel Programming
+2025/10/17
+
+===== PAGE 2/12 =====
+Taiwania 2 Cluster
+Manual: https://man.twcc.ai/@twccdocs/doc-twnia2-main-zh?type=view
+Login node: ln01.twcc.ai
+● You can only submit job and compile program on login node
+● Do NOT run program on it
+GPU: NVIDIA V100 * 8 per node
+You will use 1 GPU in this lab and hw3
+
+===== PAGE 3/12 =====
+Job submission using srun
+srun [options] ./executable [args]
+Options:
+-N NODES: the number of nodes to run the job
+-n PROCESSES: the number of total processes to launch
+-c CPUS: CPUS is the number of cpus available to each process
+-t TIME: The time limit in "minutes" or "minutes:seconds"
+-J NAME: The name of the job. Will be displayed on squeue
+-A PROJECT_ID: The ID of the project. In this course, the project ID is ACD114118
+
+
+===== PAGE 4/12 =====
+Job submission using srun
+srun [options] ./executable [args]
+Options:
+--gpus-per-node GPUS: Number of GPUs per node
+Example:
+srun -N 1 -n 1 --gpus-per-node 1 -A ACD114118 -t 1 ./executable
+
+
+===== PAGE 5/12 =====
+No Mining
+Educational use only
+
+===== PAGE 6/12 =====
+Compile & Run
+● Load cuda module: module load cuda
+● Compiler: nvcc (a gcc compiler wrapper with CUDA support)
+○ nvcc [options] <inputfile>
+○ E.g., nvcc hello_world.cu -o hello_world
+● Execute
+○ $ srun -N 1 -n 1 --gpus-per-node 1 -A ACD114118 -t 1 hello_world
+
+
+===== PAGE 7/12 =====
+Useful Commands
+● nvidia-smi
+○ Check for the available GPUs and utilization
+● nvprof
+○ Nvidia kernel profiler
+● ncu
+○ Nsight Compute. A newer version of the kernel profiler.
+● cuda-memcheck
+○ cuda-memcheck <gpu_exe>
+○ Reports illegal memory accesses. Used for debugging
+
+===== PAGE 8/12 =====
+NVIDIA-SMI
+● NVIDIA System Management Interface program
+● You can query details about
+a. gpu type
+b. gpu utilization
+c. memory usage
+d. temperature
+e. clock rate
+f. …
+
+
+===== PAGE 9/12 =====
+Proﬁler
+● nvprof
+○ Showing kernel execution time, memory usage, and API calls.
+● Nsight Compute (ncu)
+○ kernel-level analysis
+○ memory throughput, occupancy, and warp efficiency.
+
+===== PAGE 10/12 =====
+cuda-memcheck
+● This tool checks memory errors of your program, and it also reports hardware exceptions encountered 
+by the GPU. These errors may not cause program to crash, but they could result in unexpected 
+program behavior and memory misusage.
+● Useful for debugging
+● Error types
+○ https://docs.nvidia.com/cuda/archive/11.0/cuda-memcheck/index.html
+
+===== PAGE 11/12 =====
+Lab 3 Assignment
+
+===== PAGE 12/12 =====
+Google form
+Complete the google form before 2025/10/20 23:59
+https://forms.gle/gNtQyJ5vkB88RbUd8
