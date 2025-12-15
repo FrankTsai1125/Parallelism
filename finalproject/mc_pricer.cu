@@ -178,10 +178,11 @@ __global__ void mc_kernel(
 
     double payoff = 0.0;
     if (opt_type == 0) {
-      payoff = std::max(S - K, 0.0);
+      // std::max is host-only in many nvcc configs; use device-friendly max.
+      payoff = fmax(S - K, 0.0);
     } else {
       const double meanS = avgS / static_cast<double>(steps);
-      payoff = std::max(meanS - K, 0.0);
+      payoff = fmax(meanS - K, 0.0);
     }
     payoff *= disc;
 

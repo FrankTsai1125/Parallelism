@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# Some Taiwania2 login environments propagate `nounset` (`set -u`) via BASHOPTS,
+# which makes `module load` (lmod) fail because SLURM_JOBID is unset on login nodes.
+# Force-disable nounset here to make the script robust.
+set +u
+set +o nounset 2>/dev/null || true
+
 set -e
 set -o pipefail
 
@@ -30,6 +36,8 @@ if [[ "${1:-}" == "--" ]]; then
 fi
 
 echo "[1/3] Loading CUDA module..."
+# Ensure SLURM_JOBID exists (empty) to avoid lmod scripts tripping under nounset.
+export SLURM_JOBID="${SLURM_JOBID-}"
 module load cuda
 
 echo "[2/3] Compiling ${SRC} -> ${EXE} ..."
