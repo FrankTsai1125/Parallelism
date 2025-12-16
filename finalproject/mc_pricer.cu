@@ -340,6 +340,12 @@ static std::string now_timestamp_utc() {
   return oss.str();
 }
 
+struct MCResult {
+  double price = 0.0;
+  double std_error = 0.0;
+  double ms = 0.0;
+};
+
 static void write_result_csv(
     const Params& p,
     const MCResult& g,
@@ -565,12 +571,6 @@ __global__ void mc_kernel(
   atomicAdd(sum_payoff, local_sum);
   atomicAdd(sum_sq_payoff, local_sum_sq);
 }
-
-struct MCResult {
-  double price = 0.0;
-  double std_error = 0.0;
-  double ms = 0.0;
-};
 
 static MCResult run_gpu(const Params& p) {
   double* d_sum = nullptr;
