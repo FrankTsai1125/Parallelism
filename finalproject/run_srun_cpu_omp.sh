@@ -22,6 +22,7 @@ set -o pipefail
 PROJECT_ID="ACD114118"
 TIME_MIN="10"
 CPUS_PER_TASK="32"
+GPUS_PER_NODE="1"
 
 SRC="mc_pricer_omp.cpp"
 EXE="mc_pricer_omp"
@@ -56,6 +57,9 @@ echo "[1/3] (CPU) Compiling ${SRC} -> ${EXE} ..."
 g++ "${GXX_FLAGS[@]}" "${SRC}" -o "${EXE}"
 
 echo "[2/3] Submitting CPU job via srun (1 node, 1 task, ${CPUS_PER_TASK} CPUs)..."
-srun -N 1 -n 1 -c "${CPUS_PER_TASK}" -A "${PROJECT_ID}" -t "${TIME_MIN}" "./${EXE}" "${RUN_ARGS[@]}"
+# Note (Taiwania2): some partitions enforce GPU allocation even for CPU-only binaries.
+# We request 1 GPU to satisfy Slurm, but the program itself is CPU/OpenMP only.
+srun -N 1 -n 1 -c "${CPUS_PER_TASK}" --gpus-per-node "${GPUS_PER_NODE}" \
+  -A "${PROJECT_ID}" -t "${TIME_MIN}" "./${EXE}" "${RUN_ARGS[@]}"
 
 
