@@ -19,11 +19,18 @@ This repo includes a helper script:
 
 - `run_srun.sh` (loads `cuda` module, compiles `mc_pricer.cu`, and submits with the required `srun` flags)
 - `run_srun_8gpu.sh` (1 node uses 8 tasks + 8 GPUs; each task auto-selects GPU by `SLURM_LOCALID`)
+- `run_srun_cpu_omp.sh` (CPU baseline using OpenMP; compiles `mc_pricer_omp.cpp` and runs on compute node without GPU)
 
 ### Build (Linux / cluster node with CUDA)
 
 ```bash
 nvcc -O3 -std=c++17 -arch=sm_70 mc_pricer.cu -o mc_pricer
+```
+
+CPU OpenMP build:
+
+```bash
+g++ -O3 -std=c++17 -fopenmp mc_pricer_omp.cpp -o mc_pricer_omp
 ```
 
 ### Run

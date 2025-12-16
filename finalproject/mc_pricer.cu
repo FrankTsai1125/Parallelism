@@ -1033,7 +1033,6 @@ int main(int argc, char** argv) {
     }
 
     // Determine local paths (for multi-task runs) and total paths for normalization.
-    const std::int64_t total_paths = (p.paths_total > 0) ? p.paths_total : p.paths;
     std::int64_t local_paths = p.paths;
     if (ntasks > 1 && p.paths_total > 0) {
       const std::int64_t base = p.paths_total / ntasks;
