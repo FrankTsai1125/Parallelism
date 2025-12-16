@@ -51,6 +51,7 @@ struct Params {
   double S0 = 100.0;
   double K = 100.0;
   double r = 0.05;
+  double mu = 0.0;       // real-world drift (annualized). Used for path simulation if enabled.
   double sigma = 0.2;
   double T = 1.0;
   int steps = 252;
@@ -71,26 +72,33 @@ struct Params {
   std::string yahoo_csv;
   bool yahoo_use_adj = false; // use "Adj Close" instead of "Close" if available
   int trading_days = 252;     // for annualizing sigma
+  bool use_yahoo_mu = true;   // for path simulation: prefer mu estimated from yahoo if available
 
   // Optional: write one-line result CSV.
   std::string out_csv;
   bool out_csv_append = false;
+
+  // Optional: dump simulated price paths (future trajectory) to CSV.
+  std::string dump_paths_csv;
+  int dump_paths = 100; // number of paths to dump (for visualization)
 };
 
 static void usage(const char* argv0) {
   std::cerr
       << "Usage: " << argv0
       << " [--type european|asian|basket] [--S0 N] [--K N] [--r N] [--sigma N] [--T N]\n"
-      << "           [--steps N] [--paths N] [--seed N] [--assets N] [--rho R]\n"
+      << "           [--mu N] [--steps N] [--paths N] [--seed N] [--assets N] [--rho R]\n"
       << "           [--block-size N] [--blocks-per-sm N] [--device N] [--cpu]\n";
   std::cerr
       << "           [--yahoo-csv PATH] [--yahoo-adj] [--trading-days N]\n"
-      << "           [--out-csv PATH] [--append-csv]\n";
+      << "           [--out-csv PATH] [--append-csv]\n"
+      << "           [--dump-paths-csv PATH] [--dump-paths N] [--no-yahoo-mu]\n";
 }
 
 struct ArgFlags {
   bool S0_set = false;
   bool sigma_set = false;
+  bool mu_set = false;
 };
 
 static bool parse_args(int argc, char** argv, Params& p, bool& run_cpu, ArgFlags& flags) {
@@ -124,6 +132,10 @@ static bool parse_args(int argc, char** argv, Params& p, bool& run_cpu, ArgFlags
     } else if (std::strcmp(argv[i], "--r") == 0) {
       const char* v = next("--r"); if (!v) return false;
       p.r = std::stod(v);
+    } else if (std::strcmp(argv[i], "--mu") == 0) {
+      const char* v = next("--mu"); if (!v) return false;
+      p.mu = std::stod(v);
+      flags.mu_set = true;
     } else if (std::strcmp(argv[i], "--sigma") == 0) {
       const char* v = next("--sigma"); if (!v) return false;
       p.sigma = std::stod(v);
@@ -170,6 +182,14 @@ static bool parse_args(int argc, char** argv, Params& p, bool& run_cpu, ArgFlags
       p.out_csv = v;
     } else if (std::strcmp(argv[i], "--append-csv") == 0) {
       p.out_csv_append = true;
+    } else if (std::strcmp(argv[i], "--dump-paths-csv") == 0) {
+      const char* v = next("--dump-paths-csv"); if (!v) return false;
+      p.dump_paths_csv = v;
+    } else if (std::strcmp(argv[i], "--dump-paths") == 0) {
+      const char* v = next("--dump-paths"); if (!v) return false;
+      p.dump_paths = std::stoi(v);
+    } else if (std::strcmp(argv[i], "--no-yahoo-mu") == 0) {
+      p.use_yahoo_mu = false;
     } else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
       return false;
     } else {
@@ -187,6 +207,10 @@ static bool parse_args(int argc, char** argv, Params& p, bool& run_cpu, ArgFlags
   }
   if (p.trading_days <= 0) {
     std::cerr << "Invalid --trading-days.\n";
+    return false;
+  }
+  if (p.dump_paths < 1) {
+    std::cerr << "Invalid --dump-paths.\n";
     return false;
   }
   if (p.type == OptionType::AsianArithmeticCall && p.assets != 1) {
@@ -227,6 +251,8 @@ struct YahooStats {
   double S0 = 0.0;
   double sigma_daily = 0.0;
   double sigma_annual = 0.0;
+  double mu_daily = 0.0;
+  double mu_annual = 0.0;
   int n_prices = 0;
   int n_returns = 0;
   std::string col_used;
@@ -305,11 +331,15 @@ static YahooStats load_yahoo_csv_compute_S0_sigma(const std::string& path, bool 
   double var = ssq / static_cast<double>(r.size() - 1);
   double sigma_daily = std::sqrt(std::max(var, 0.0));
   double sigma_annual = sigma_daily * std::sqrt(static_cast<double>(trading_days));
+  double mu_daily = mean;
+  double mu_annual = mu_daily * static_cast<double>(trading_days);
 
   YahooStats st{};
   st.S0 = px.back();
   st.sigma_daily = sigma_daily;
   st.sigma_annual = sigma_annual;
+  st.mu_daily = mu_daily;
+  st.mu_annual = mu_annual;
   st.n_prices = static_cast<int>(px.size());
   st.n_returns = static_cast<int>(r.size());
   st.col_used = col_used;
@@ -366,8 +396,8 @@ static void write_result_csv(
 
   if (need_header) {
     out << "timestamp_utc,"
-        << "yahoo_csv,yahoo_col,yahoo_S0,yahoo_sigma_annual,yahoo_n_prices,yahoo_n_returns,"
-        << "S0,sigma,K,r,T,steps,paths,type,assets,rho,block_size,blocks_per_sm,"
+        << "yahoo_csv,yahoo_col,yahoo_S0,yahoo_sigma_annual,yahoo_mu_annual,yahoo_n_prices,yahoo_n_returns,"
+        << "S0,sigma,mu,K,r,T,steps,paths,type,assets,rho,block_size,blocks_per_sm,"
         << "device,slurm_procid,slurm_localid,seed,"
         << "gpu_name,cc_major,cc_minor,"
         << "gpu_price,gpu_std_error,gpu_time_ms,"
@@ -382,13 +412,14 @@ static void write_result_csv(
         << csv_escape(ys->col_used) << ","
         << ys->S0 << ","
         << ys->sigma_annual << ","
+        << ys->mu_annual << ","
         << ys->n_prices << ","
         << ys->n_returns << ",";
   } else {
-    out << "," << "," << "," << "," << "," << ",";
+    out << "," << "," << "," << "," << "," << "," << ",";
   }
 
-  out << p.S0 << "," << p.sigma << "," << p.K << "," << p.r << "," << p.T << ","
+  out << p.S0 << "," << p.sigma << "," << p.mu << "," << p.K << "," << p.r << "," << p.T << ","
       << p.steps << "," << p.paths << "," << csv_escape(option_type_str(p.type)) << ","
       << p.assets << "," << p.rho << "," << p.block_size << "," << p.blocks_per_sm << ","
       << chosen_device << "," << proc_id << "," << local_id << "," << p.seed << ","
@@ -401,6 +432,48 @@ static void write_result_csv(
     out << "," << ",";
   }
   out << "\n";
+}
+
+static void dump_paths_csv(
+    const Params& p,
+    const YahooStats* ys,
+    bool have_yahoo,
+    bool mu_overridden_by_cli) {
+
+  // For "forecast-like" simulation we use mu (real-world drift) if provided, else
+  // optionally use yahoo-estimated mu, else fall back to r.
+  double drift_rate = p.r;
+  if (mu_overridden_by_cli) {
+    drift_rate = p.mu;
+  } else if (have_yahoo && p.use_yahoo_mu) {
+    drift_rate = ys->mu_annual;
+  } else {
+    drift_rate = p.r;
+  }
+
+  std::ofstream out(p.dump_paths_csv, std::ios::out | std::ios::trunc);
+  if (!out.is_open()) {
+    throw std::runtime_error("Failed to open dump csv: " + p.dump_paths_csv);
+  }
+  out << "path_id,step,t_years,price\n";
+
+  // Simple CPU simulation for export (small N like 100 paths is fine).
+  const double dt = p.T / static_cast<double>(p.steps);
+  const double drift = (drift_rate - 0.5 * p.sigma * p.sigma) * dt;
+  const double vol = p.sigma * std::sqrt(dt);
+
+  std::mt19937_64 rng(p.seed);
+  std::normal_distribution<double> nd(0.0, 1.0);
+
+  for (int pid = 0; pid < p.dump_paths; ++pid) {
+    double S = p.S0;
+    out << pid << "," << 0 << "," << 0.0 << "," << S << "\n";
+    for (int t = 1; t <= p.steps; ++t) {
+      const double z = nd(rng);
+      S *= std::exp(drift + vol * z);
+      out << pid << "," << t << "," << (static_cast<double>(t) * dt) << "," << S << "\n";
+    }
+  }
 }
 
 static int env_int(const char* name, int fallback) {
@@ -725,6 +798,7 @@ int main(int argc, char** argv) {
       have_yahoo = true;
       if (!flags.S0_set) p.S0 = ys.S0;
       if (!flags.sigma_set) p.sigma = ys.sigma_annual;
+      if (!flags.mu_set) p.mu = ys.mu_annual;
     } catch (const std::exception& e) {
       std::cerr << "Yahoo CSV error: " << e.what() << "\n";
       return 2;
@@ -744,11 +818,27 @@ int main(int argc, char** argv) {
               << " n_returns=" << ys.n_returns
               << " sigma_daily=" << ys.sigma_daily
               << " sigma_annual=" << ys.sigma_annual
+              << " mu_annual=" << ys.mu_annual
               << " (trading_days=" << p.trading_days << ")\n";
     std::cout << "Using: S0=" << p.S0 << " sigma=" << p.sigma
               << (flags.S0_set ? " (S0 overridden by --S0)" : "")
               << (flags.sigma_set ? " (sigma overridden by --sigma)" : "")
+              << " mu=" << p.mu
+              << (flags.mu_set ? " (mu overridden by --mu)" : "")
               << "\n";
+  }
+
+  // If requested, dump simulated future paths to CSV (independent from option pricing).
+  if (!p.dump_paths_csv.empty()) {
+    try {
+      dump_paths_csv(p, &ys, have_yahoo, flags.mu_set);
+      std::cout << "Wrote paths CSV: " << p.dump_paths_csv
+                << " (paths=" << p.dump_paths << ", steps=" << p.steps
+                << ", T=" << p.T << ")\n";
+    } catch (const std::exception& e) {
+      std::cerr << "Path dump error: " << e.what() << "\n";
+      return 2;
+    }
   }
   std::cout << "Option: "
             << ((p.type == OptionType::EuropeanCall)

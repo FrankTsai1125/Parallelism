@@ -145,4 +145,46 @@ If you want to append multiple runs into the same CSV (e.g., different `--paths`
 ./mc_pricer --type european --paths 5000000 --steps 252 --yahoo-csv data/2330_TW.csv --out-csv results_2330.csv --append-csv
 ```
 
+### Forecast-style output: dump 1-year daily price paths (CSV)
+
+If what you want is **"future 1-year daily trajectories"** (not an option price), use `--dump-paths-csv`.
+This writes `dump_paths * (steps+1)` rows:
+
+- columns: `path_id, step, t_years, price`
+- default `steps=252` (trading days), default `dump_paths=100`
+
+Example:
+
+```bash
+./mc_pricer --yahoo-csv data/2330_TW.csv --T 1 --steps 252 \
+  --dump-paths 100 --dump-paths-csv paths_2330_1y.csv
+```
+
+By default, the drift for simulation uses **mu estimated from the Yahoo CSV** (annualized mean of log returns).
+If you want to disable that and use `r` instead:
+
+```bash
+./mc_pricer --yahoo-csv data/2330_TW.csv --T 1 --steps 252 \
+  --no-yahoo-mu --dump-paths 100 --dump-paths-csv paths_2330_1y.csv
+```
+
+### Aggregate many paths into mean/std band (CSV)
+
+If you simulate many paths (e.g. 1000) and want **daily mean / std / percentile bands**:
+
+1) Dump paths (example: 1000 paths):
+
+```bash
+./mc_pricer --yahoo-csv data/2330_TW.csv --T 1 --steps 252 \
+  --dump-paths 1000 --dump-paths-csv paths_2330_1y_1000.csv
+```
+
+2) Aggregate into bands (default percentiles: 5/50/95):
+
+```bash
+python tools/aggregate_paths_band.py --in paths_2330_1y_1000.csv --out band_2330_1y_1000.csv
+```
+
+Output columns include: `step,t_years,mean,std,p5,p50,p95`
+
 
