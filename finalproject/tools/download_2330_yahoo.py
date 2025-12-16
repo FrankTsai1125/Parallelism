@@ -1,6 +1,7 @@
 import argparse
 import datetime as dt
 import os
+import time
 from dataclasses import dataclass
 
 import numpy as np
@@ -42,6 +43,18 @@ def _parse_args() -> argparse.Namespace:
         "--no-vol",
         action="store_true",
         help="Skip volatility estimation; only download CSV.",
+    )
+    p.add_argument(
+        "--retries",
+        type=int,
+        default=8,
+        help="Retry count when Yahoo rate-limits (default: 8).",
+    )
+    p.add_argument(
+        "--retry-sleep",
+        type=float,
+        default=10.0,
+        help="Initial sleep seconds between retries (exponential backoff) (default: 10).",
     )
     return p.parse_args()
 
@@ -88,6 +101,11 @@ def download_2330_daily(start: dt.date, end: dt.date) -> pd.DataFrame:
     return df
 
 
+def _looks_rate_limited(err: BaseException) -> bool:
+    s = repr(err)
+    return ("YFRateLimitError" in s) or ("Too Many Requests" in s) or ("rate limit" in s.lower())
+
+
 def estimate_volatility(df: pd.DataFrame, use_adj: bool, trading_days: int) -> VolResult:
     col = "Adj Close" if use_adj and "Adj Close" in df.columns else "Close"
     if col not in df.columns:
@@ -105,7 +123,21 @@ def main() -> int:
     args = _parse_args()
     start, end = _date_range(args)
 
-    df = download_2330_daily(start, end)
+    attempt = 0
+    sleep_s = float(args.retry_sleep)
+    last_err: Exception | None = None
+    while True:
+        try:
+            df = download_2330_daily(start, end)
+            break
+        except Exception as e:
+            last_err = e
+            attempt += 1
+            if attempt > int(args.retries) or not _looks_rate_limited(e):
+                raise
+            print(f"Yahoo rate limited; retrying in {sleep_s:.1f}s (attempt {attempt}/{args.retries})...")
+            time.sleep(sleep_s)
+            sleep_s = min(sleep_s * 2.0, 300.0)
 
     out_path = args.out
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
