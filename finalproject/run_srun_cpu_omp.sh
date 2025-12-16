@@ -21,7 +21,11 @@ set -o pipefail
 
 PROJECT_ID="ACD114118"
 TIME_MIN="10"
-CPUS_PER_TASK="32"
+# NOTE (Taiwania2 policy):
+# On this partition the CPU limit shown by Slurm is 4 CPUs per node for this job type
+# (error: "CPU per node specification 32 is out of limit: 1 * 4.").
+# So we default to 4 OpenMP threads for the CPU baseline.
+CPUS_PER_TASK="4"
 GPUS_PER_NODE="1"
 
 SRC="mc_pricer_omp.cpp"
@@ -59,7 +63,7 @@ g++ "${GXX_FLAGS[@]}" "${SRC}" -o "${EXE}"
 echo "[2/3] Submitting CPU job via srun (1 node, 1 task, ${CPUS_PER_TASK} CPUs)..."
 # Note (Taiwania2): some partitions enforce GPU allocation even for CPU-only binaries.
 # We request 1 GPU to satisfy Slurm, but the program itself is CPU/OpenMP only.
-srun -N 1 -n 1 -c "${CPUS_PER_TASK}" --gpus-per-node "${GPUS_PER_NODE}" \
+srun -N 1 --ntasks-per-node 1 -c "${CPUS_PER_TASK}" --gpus-per-node "${GPUS_PER_NODE}" \
   -A "${PROJECT_ID}" -t "${TIME_MIN}" "./${EXE}" "${RUN_ARGS[@]}"
 
 
