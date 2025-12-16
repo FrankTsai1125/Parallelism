@@ -83,4 +83,66 @@ chmod +x run_srun_8gpu.sh
 - `--blocks-per-sm` blocks per SM (default 8)
 - `--device` CUDA device id override (default: auto from `SLURM_LOCALID` if present)
 
+### Download 2330 historical prices from Yahoo (CSV) + estimate sigma
+
+This repo includes a small helper script that **always downloads `2330.TW`** daily history from Yahoo Finance
+and optionally prints an estimated annualized volatility (sigma) from log returns.
+
+Prereqs (Python 3.9+ recommended):
+
+```bash
+pip install -r requirements.txt
+```
+
+Download the last 5 years (default):
+
+```bash
+python tools/download_2330_yahoo.py
+```
+
+Download the last N years:
+
+```bash
+python tools/download_2330_yahoo.py --years 3
+```
+
+Or specify an explicit date range:
+
+```bash
+python tools/download_2330_yahoo.py --start 2020-01-01 --end 2025-12-16
+```
+
+Output is saved to `data/2330_TW.csv` by default. Yahoo typically allows **as much daily history as it has**
+for the ticker (often decades). Practically, 1–5 years is common for estimating a stable recent sigma,
+but you can increase it if you want longer-term volatility.
+
+### One-shot: download 5y data -> mc_pricer loads it -> write result CSV
+
+1) Download last 5 years (default) to `data/2330_TW.csv`:
+
+```bash
+python tools/download_2330_yahoo.py --years 5
+```
+
+2) Compile `mc_pricer` (on a CUDA machine / Taiwania2 login node):
+
+```bash
+nvcc -O3 -std=c++17 -arch=sm_70 mc_pricer.cu -o mc_pricer
+```
+
+3) Run with `--yahoo-csv` so `mc_pricer` automatically sets `S0` (latest close) and annualized `sigma`
+from the CSV, then writes the run summary to `results_2330.csv`:
+
+```bash
+./mc_pricer --type european --paths 5000000 --steps 252 \
+  --yahoo-csv data/2330_TW.csv --out-csv results_2330.csv
+```
+
+If you want to append multiple runs into the same CSV (e.g., different `--paths`):
+
+```bash
+./mc_pricer --type european --paths 1000000 --steps 252 --yahoo-csv data/2330_TW.csv --out-csv results_2330.csv --append-csv
+./mc_pricer --type european --paths 5000000 --steps 252 --yahoo-csv data/2330_TW.csv --out-csv results_2330.csv --append-csv
+```
+
 

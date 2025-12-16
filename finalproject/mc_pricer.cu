@@ -24,9 +24,11 @@
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <random>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -64,6 +66,15 @@ struct Params {
   int block_size = 256;
   int blocks_per_sm = 8;
   int device = -1; // -1 => auto (use SLURM_LOCALID if present, else 0)
+
+  // Optional: load S0/sigma from Yahoo CSV (downloaded by tools/download_2330_yahoo.py).
+  std::string yahoo_csv;
+  bool yahoo_use_adj = false; // use "Adj Close" instead of "Close" if available
+  int trading_days = 252;     // for annualizing sigma
+
+  // Optional: write one-line result CSV.
+  std::string out_csv;
+  bool out_csv_append = false;
 };
 
 static void usage(const char* argv0) {
@@ -72,9 +83,17 @@ static void usage(const char* argv0) {
       << " [--type european|asian|basket] [--S0 N] [--K N] [--r N] [--sigma N] [--T N]\n"
       << "           [--steps N] [--paths N] [--seed N] [--assets N] [--rho R]\n"
       << "           [--block-size N] [--blocks-per-sm N] [--device N] [--cpu]\n";
+  std::cerr
+      << "           [--yahoo-csv PATH] [--yahoo-adj] [--trading-days N]\n"
+      << "           [--out-csv PATH] [--append-csv]\n";
 }
 
-static bool parse_args(int argc, char** argv, Params& p, bool& run_cpu) {
+struct ArgFlags {
+  bool S0_set = false;
+  bool sigma_set = false;
+};
+
+static bool parse_args(int argc, char** argv, Params& p, bool& run_cpu, ArgFlags& flags) {
   run_cpu = false;
   for (int i = 1; i < argc; ++i) {
     auto next = [&](const char* name) -> const char* {
@@ -98,6 +117,7 @@ static bool parse_args(int argc, char** argv, Params& p, bool& run_cpu) {
     } else if (std::strcmp(argv[i], "--S0") == 0) {
       const char* v = next("--S0"); if (!v) return false;
       p.S0 = std::stod(v);
+      flags.S0_set = true;
     } else if (std::strcmp(argv[i], "--K") == 0) {
       const char* v = next("--K"); if (!v) return false;
       p.K = std::stod(v);
@@ -107,6 +127,7 @@ static bool parse_args(int argc, char** argv, Params& p, bool& run_cpu) {
     } else if (std::strcmp(argv[i], "--sigma") == 0) {
       const char* v = next("--sigma"); if (!v) return false;
       p.sigma = std::stod(v);
+      flags.sigma_set = true;
     } else if (std::strcmp(argv[i], "--T") == 0) {
       const char* v = next("--T"); if (!v) return false;
       p.T = std::stod(v);
@@ -136,6 +157,19 @@ static bool parse_args(int argc, char** argv, Params& p, bool& run_cpu) {
       p.device = std::stoi(v);
     } else if (std::strcmp(argv[i], "--cpu") == 0) {
       run_cpu = true;
+    } else if (std::strcmp(argv[i], "--yahoo-csv") == 0) {
+      const char* v = next("--yahoo-csv"); if (!v) return false;
+      p.yahoo_csv = v;
+    } else if (std::strcmp(argv[i], "--yahoo-adj") == 0) {
+      p.yahoo_use_adj = true;
+    } else if (std::strcmp(argv[i], "--trading-days") == 0) {
+      const char* v = next("--trading-days"); if (!v) return false;
+      p.trading_days = std::stoi(v);
+    } else if (std::strcmp(argv[i], "--out-csv") == 0) {
+      const char* v = next("--out-csv"); if (!v) return false;
+      p.out_csv = v;
+    } else if (std::strcmp(argv[i], "--append-csv") == 0) {
+      p.out_csv_append = true;
     } else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
       return false;
     } else {
@@ -151,6 +185,10 @@ static bool parse_args(int argc, char** argv, Params& p, bool& run_cpu) {
     std::cerr << "Invalid GPU launch parameters.\n";
     return false;
   }
+  if (p.trading_days <= 0) {
+    std::cerr << "Invalid --trading-days.\n";
+    return false;
+  }
   if (p.type == OptionType::AsianArithmeticCall && p.assets != 1) {
     std::cerr << "Asian option is currently implemented for assets=1 only.\n";
     return false;
@@ -159,6 +197,204 @@ static bool parse_args(int argc, char** argv, Params& p, bool& run_cpu) {
     // allow assets=1 but it's identical to european; warn by allowing it.
   }
   return true;
+}
+
+static bool file_nonempty(const std::string& path) {
+  std::ifstream f(path, std::ios::binary);
+  if (!f.good()) return false;
+  f.seekg(0, std::ios::end);
+  return f.tellg() > 0;
+}
+
+static std::string csv_escape(std::string s) {
+  bool need_quotes = false;
+  for (char c : s) {
+    if (c == '"' || c == ',' || c == '\n' || c == '\r') { need_quotes = true; break; }
+  }
+  if (!need_quotes) return s;
+  std::string out;
+  out.reserve(s.size() + 2);
+  out.push_back('"');
+  for (char c : s) {
+    if (c == '"') out += "\"\"";
+    else out.push_back(c);
+  }
+  out.push_back('"');
+  return out;
+}
+
+struct YahooStats {
+  double S0 = 0.0;
+  double sigma_daily = 0.0;
+  double sigma_annual = 0.0;
+  int n_prices = 0;
+  int n_returns = 0;
+  std::string col_used;
+};
+
+static YahooStats load_yahoo_csv_compute_S0_sigma(const std::string& path, bool use_adj, int trading_days) {
+  std::ifstream in(path);
+  if (!in.is_open()) {
+    throw std::runtime_error("Failed to open yahoo csv: " + path);
+  }
+
+  std::string header;
+  if (!std::getline(in, header)) {
+    throw std::runtime_error("Empty yahoo csv: " + path);
+  }
+
+  auto split = [](const std::string& line) -> std::vector<std::string> {
+    std::vector<std::string> out;
+    std::string cur;
+    std::istringstream ss(line);
+    while (std::getline(ss, cur, ',')) out.push_back(cur);
+    return out;
+  };
+
+  std::vector<std::string> cols = split(header);
+  int idx_close = -1;
+  int idx_adj = -1;
+  for (int i = 0; i < static_cast<int>(cols.size()); ++i) {
+    if (cols[i] == "Close") idx_close = i;
+    if (cols[i] == "Adj Close") idx_adj = i;
+  }
+  int idx = (use_adj && idx_adj >= 0) ? idx_adj : idx_close;
+  std::string col_used = (use_adj && idx_adj >= 0) ? "Adj Close" : "Close";
+  if (idx < 0) {
+    throw std::runtime_error("Yahoo csv missing required column Close/Adj Close: " + path);
+  }
+
+  std::vector<double> px;
+  px.reserve(2048);
+
+  std::string line;
+  while (std::getline(in, line)) {
+    if (line.empty()) continue;
+    std::vector<std::string> fields = split(line);
+    if (idx >= static_cast<int>(fields.size())) continue;
+    try {
+      const std::string& s = fields[idx];
+      if (s.empty()) continue;
+      double v = std::stod(s);
+      if (v > 0.0 && std::isfinite(v)) px.push_back(v);
+    } catch (...) {
+      continue;
+    }
+  }
+
+  if (px.size() < 2) {
+    throw std::runtime_error("Not enough price points in yahoo csv: " + path);
+  }
+
+  std::vector<double> r;
+  r.reserve(px.size() - 1);
+  for (std::size_t i = 1; i < px.size(); ++i) {
+    r.push_back(std::log(px[i] / px[i - 1]));
+  }
+
+  // Sample stddev (ddof=1)
+  double mean = 0.0;
+  for (double x : r) mean += x;
+  mean /= static_cast<double>(r.size());
+
+  double ssq = 0.0;
+  for (double x : r) {
+    double d = x - mean;
+    ssq += d * d;
+  }
+  double var = ssq / static_cast<double>(r.size() - 1);
+  double sigma_daily = std::sqrt(std::max(var, 0.0));
+  double sigma_annual = sigma_daily * std::sqrt(static_cast<double>(trading_days));
+
+  YahooStats st{};
+  st.S0 = px.back();
+  st.sigma_daily = sigma_daily;
+  st.sigma_annual = sigma_annual;
+  st.n_prices = static_cast<int>(px.size());
+  st.n_returns = static_cast<int>(r.size());
+  st.col_used = col_used;
+  return st;
+}
+
+static const char* option_type_str(OptionType t) {
+  switch (t) {
+    case OptionType::EuropeanCall: return "european";
+    case OptionType::AsianArithmeticCall: return "asian";
+    case OptionType::BasketEuropeanCall: return "basket";
+  }
+  return "unknown";
+}
+
+static std::string now_timestamp_utc() {
+  using clock = std::chrono::system_clock;
+  auto now = clock::now();
+  std::time_t tt = clock::to_time_t(now);
+  std::tm tm{};
+#if defined(_WIN32)
+  gmtime_s(&tm, &tt);
+#else
+  gmtime_r(&tt, &tm);
+#endif
+  std::ostringstream oss;
+  oss << std::put_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
+  return oss.str();
+}
+
+static void write_result_csv(
+    const Params& p,
+    const MCResult& g,
+    const MCResult* c,
+    const cudaDeviceProp& prop,
+    int chosen_device,
+    int proc_id,
+    int local_id,
+    const YahooStats* ys) {
+
+  const bool append = p.out_csv_append;
+  const bool need_header = !append || !file_nonempty(p.out_csv);
+
+  std::ofstream out(p.out_csv, append ? (std::ios::out | std::ios::app) : (std::ios::out | std::ios::trunc));
+  if (!out.is_open()) {
+    throw std::runtime_error("Failed to open out csv: " + p.out_csv);
+  }
+
+  if (need_header) {
+    out << "timestamp_utc,"
+        << "yahoo_csv,yahoo_col,yahoo_S0,yahoo_sigma_annual,yahoo_n_prices,yahoo_n_returns,"
+        << "S0,sigma,K,r,T,steps,paths,type,assets,rho,block_size,blocks_per_sm,"
+        << "device,slurm_procid,slurm_localid,seed,"
+        << "gpu_name,cc_major,cc_minor,"
+        << "gpu_price,gpu_std_error,gpu_time_ms,"
+        << "cpu_price,cpu_std_error,cpu_time_ms"
+        << "\n";
+  }
+
+  out << csv_escape(now_timestamp_utc()) << ",";
+
+  if (ys) {
+    out << csv_escape(p.yahoo_csv) << ","
+        << csv_escape(ys->col_used) << ","
+        << ys->S0 << ","
+        << ys->sigma_annual << ","
+        << ys->n_prices << ","
+        << ys->n_returns << ",";
+  } else {
+    out << "," << "," << "," << "," << "," << ",";
+  }
+
+  out << p.S0 << "," << p.sigma << "," << p.K << "," << p.r << "," << p.T << ","
+      << p.steps << "," << p.paths << "," << csv_escape(option_type_str(p.type)) << ","
+      << p.assets << "," << p.rho << "," << p.block_size << "," << p.blocks_per_sm << ","
+      << chosen_device << "," << proc_id << "," << local_id << "," << p.seed << ","
+      << csv_escape(prop.name) << "," << prop.major << "," << prop.minor << ","
+      << g.price << "," << g.std_error << "," << g.ms << ",";
+
+  if (c) {
+    out << c->price << "," << c->std_error << "," << c->ms;
+  } else {
+    out << "," << ",";
+  }
+  out << "\n";
 }
 
 static int env_int(const char* name, int fallback) {
@@ -475,9 +711,24 @@ static MCResult run_cpu(const Params& p) {
 int main(int argc, char** argv) {
   Params p{};
   bool run_cpu_flag = false;
-  if (!parse_args(argc, argv, p, run_cpu_flag)) {
+  ArgFlags flags{};
+  if (!parse_args(argc, argv, p, run_cpu_flag, flags)) {
     usage(argv[0]);
     return 2;
+  }
+
+  YahooStats ys{};
+  bool have_yahoo = false;
+  if (!p.yahoo_csv.empty()) {
+    try {
+      ys = load_yahoo_csv_compute_S0_sigma(p.yahoo_csv, p.yahoo_use_adj, p.trading_days);
+      have_yahoo = true;
+      if (!flags.S0_set) p.S0 = ys.S0;
+      if (!flags.sigma_set) p.sigma = ys.sigma_annual;
+    } catch (const std::exception& e) {
+      std::cerr << "Yahoo CSV error: " << e.what() << "\n";
+      return 2;
+    }
   }
 
   // If launched via Slurm with multiple tasks, bind each task to its local GPU.
@@ -486,6 +737,19 @@ int main(int argc, char** argv) {
   const int proc_id = env_int("SLURM_PROCID", 0);
 
   std::cout << std::fixed << std::setprecision(6);
+  if (have_yahoo) {
+    std::cout << "YahooCSV: path=" << p.yahoo_csv
+              << " col=" << ys.col_used
+              << " n_prices=" << ys.n_prices
+              << " n_returns=" << ys.n_returns
+              << " sigma_daily=" << ys.sigma_daily
+              << " sigma_annual=" << ys.sigma_annual
+              << " (trading_days=" << p.trading_days << ")\n";
+    std::cout << "Using: S0=" << p.S0 << " sigma=" << p.sigma
+              << (flags.S0_set ? " (S0 overridden by --S0)" : "")
+              << (flags.sigma_set ? " (sigma overridden by --sigma)" : "")
+              << "\n";
+  }
   std::cout << "Option: "
             << ((p.type == OptionType::EuropeanCall)
                     ? "EuropeanCall"
@@ -531,10 +795,23 @@ int main(int argc, char** argv) {
             << "  time_ms=" << g.ms << "\n";
 
   // Optional CPU baseline for sanity checks (slow for large paths)
+  MCResult c{};
+  bool have_cpu = false;
   if (run_cpu_flag) {
-    MCResult c = run_cpu(p);
+    c = run_cpu(p);
+    have_cpu = true;
     std::cout << "[CPU] price=" << c.price << "  std_error=" << c.std_error
               << "  time_ms=" << c.ms << "\n";
+  }
+
+  if (!p.out_csv.empty()) {
+    try {
+      write_result_csv(p, g, have_cpu ? &c : nullptr, prop, chosen_device, proc_id, local_id, have_yahoo ? &ys : nullptr);
+      std::cout << "Wrote result CSV: " << p.out_csv << (p.out_csv_append ? " (append)\n" : "\n");
+    } catch (const std::exception& e) {
+      std::cerr << "CSV write error: " << e.what() << "\n";
+      return 2;
+    }
   }
 
   return 0;
