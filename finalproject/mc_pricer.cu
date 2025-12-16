@@ -31,6 +31,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 // ----------------------------- Utilities -----------------------------
@@ -56,6 +57,7 @@ struct Params {
   double T = 1.0;
   int steps = 252;
   std::int64_t paths = 5'000'000;
+  std::int64_t paths_total = 0; // if set and running multi-task, split total paths across tasks
   OptionType type = OptionType::EuropeanCall;
   std::uint64_t seed = 1234;
 
@@ -81,18 +83,23 @@ struct Params {
   // Optional: dump simulated price paths (future trajectory) to CSV.
   std::string dump_paths_csv;
   int dump_paths = 100; // number of paths to dump (for visualization)
+
+  // Optional: output aggregated mean/std trajectory (one row per step). This is the recommended
+  // output for CPU vs GPU vs 8GPU performance comparisons because it avoids massive I/O.
+  std::string avg_path_csv;
 };
 
 static void usage(const char* argv0) {
   std::cerr
       << "Usage: " << argv0
       << " [--type european|asian|basket] [--S0 N] [--K N] [--r N] [--sigma N] [--T N]\n"
-      << "           [--mu N] [--steps N] [--paths N] [--seed N] [--assets N] [--rho R]\n"
+      << "           [--mu N] [--steps N] [--paths N] [--paths-total N] [--seed N] [--assets N] [--rho R]\n"
       << "           [--block-size N] [--blocks-per-sm N] [--device N] [--cpu]\n";
   std::cerr
       << "           [--yahoo-csv PATH] [--yahoo-adj] [--trading-days N]\n"
       << "           [--out-csv PATH] [--append-csv]\n"
-      << "           [--dump-paths-csv PATH] [--dump-paths N] [--no-yahoo-mu]\n";
+      << "           [--dump-paths-csv PATH] [--dump-paths N] [--no-yahoo-mu]\n"
+      << "           [--avg-path-csv PATH]\n";
 }
 
 struct ArgFlags {
@@ -149,6 +156,9 @@ static bool parse_args(int argc, char** argv, Params& p, bool& run_cpu, ArgFlags
     } else if (std::strcmp(argv[i], "--paths") == 0) {
       const char* v = next("--paths"); if (!v) return false;
       p.paths = std::stoll(v);
+    } else if (std::strcmp(argv[i], "--paths-total") == 0) {
+      const char* v = next("--paths-total"); if (!v) return false;
+      p.paths_total = std::stoll(v);
     } else if (std::strcmp(argv[i], "--seed") == 0) {
       const char* v = next("--seed"); if (!v) return false;
       p.seed = static_cast<std::uint64_t>(std::stoull(v));
@@ -190,6 +200,9 @@ static bool parse_args(int argc, char** argv, Params& p, bool& run_cpu, ArgFlags
       p.dump_paths = std::stoi(v);
     } else if (std::strcmp(argv[i], "--no-yahoo-mu") == 0) {
       p.use_yahoo_mu = false;
+    } else if (std::strcmp(argv[i], "--avg-path-csv") == 0) {
+      const char* v = next("--avg-path-csv"); if (!v) return false;
+      p.avg_path_csv = v;
     } else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
       return false;
     } else {
@@ -199,6 +212,10 @@ static bool parse_args(int argc, char** argv, Params& p, bool& run_cpu, ArgFlags
   }
   if (p.steps <= 0 || p.paths <= 0 || p.T <= 0.0 || p.sigma < 0.0 || p.assets <= 0) {
     std::cerr << "Invalid parameters.\n";
+    return false;
+  }
+  if (p.paths_total < 0) {
+    std::cerr << "Invalid --paths-total.\n";
     return false;
   }
   if (p.block_size <= 0 || p.blocks_per_sm <= 0) {
@@ -474,6 +491,185 @@ static void dump_paths_csv(
       out << pid << "," << t << "," << (static_cast<double>(t) * dt) << "," << S << "\n";
     }
   }
+}
+
+// ----------------------------- GPU mean/std trajectory (single-asset) -----------------------------
+
+__global__ void meanpath_kernel(
+    std::int64_t paths,
+    int steps,
+    double S0,
+    double drift_rate, // annualized drift (mu or r)
+    double sigma,
+    double T,
+    std::uint64_t seed,
+    double* sumS,      // length steps+1
+    double* sumSqS) {  // length steps+1
+
+  const int tid = threadIdx.x;
+  const std::int64_t gid = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + tid;
+  if (gid >= paths) return;
+
+  extern __shared__ double sh[];
+  double* sh_sum = sh;
+  double* sh_sumsq = sh + blockDim.x;
+
+  const double dt = T / static_cast<double>(steps);
+  const double drift = (drift_rate - 0.5 * sigma * sigma) * dt;
+  const double vol = sigma * std::sqrt(dt);
+
+  curandStatePhilox4_32_10_t st;
+  curand_init(static_cast<unsigned long long>(seed),
+              static_cast<unsigned long long>(gid),
+              0ULL, &st);
+
+  double S = S0;
+
+  // step 0
+  sh_sum[tid] = S;
+  sh_sumsq[tid] = S * S;
+  __syncthreads();
+  for (int offset = blockDim.x / 2; offset > 0; offset >>= 1) {
+    if (tid < offset) {
+      sh_sum[tid] += sh_sum[tid + offset];
+      sh_sumsq[tid] += sh_sumsq[tid + offset];
+    }
+    __syncthreads();
+  }
+  if (tid == 0) {
+    atomicAdd(&sumS[0], sh_sum[0]);
+    atomicAdd(&sumSqS[0], sh_sumsq[0]);
+  }
+
+  for (int t = 1; t <= steps; ++t) {
+    const double z = static_cast<double>(curand_normal(&st));
+    S *= std::exp(drift + vol * z);
+
+    sh_sum[tid] = S;
+    sh_sumsq[tid] = S * S;
+    __syncthreads();
+    for (int offset = blockDim.x / 2; offset > 0; offset >>= 1) {
+      if (tid < offset) {
+        sh_sum[tid] += sh_sum[tid + offset];
+        sh_sumsq[tid] += sh_sumsq[tid + offset];
+      }
+      __syncthreads();
+    }
+    if (tid == 0) {
+      atomicAdd(&sumS[t], sh_sum[0]);
+      atomicAdd(&sumSqS[t], sh_sumsq[0]);
+    }
+  }
+}
+
+struct MeanPathResult {
+  std::vector<double> mean; // length steps+1
+  std::vector<double> std;  // length steps+1
+  double ms = 0.0;
+};
+
+static MeanPathResult run_gpu_meanpath_single_asset(const Params& p, double drift_rate) {
+  if (p.paths <= 0) {
+    throw std::runtime_error("paths must be > 0 for avg-path-csv");
+  }
+  if (p.steps <= 0) {
+    throw std::runtime_error("steps must be > 0 for avg-path-csv");
+  }
+
+  const int block = p.block_size;
+  const std::int64_t blocks_needed = (p.paths + block - 1) / block;
+  if (blocks_needed > 65535) {
+    throw std::runtime_error("Too many blocks for avg-path-csv with current block_size; reduce paths or increase block_size.");
+  }
+  const int blocks = static_cast<int>(blocks_needed);
+
+  const std::size_t n = static_cast<std::size_t>(p.steps) + 1;
+  double* d_sum = nullptr;
+  double* d_sumsq = nullptr;
+  CUDA_CHECK(cudaMalloc(&d_sum, sizeof(double) * n));
+  CUDA_CHECK(cudaMalloc(&d_sumsq, sizeof(double) * n));
+  CUDA_CHECK(cudaMemset(d_sum, 0, sizeof(double) * n));
+  CUDA_CHECK(cudaMemset(d_sumsq, 0, sizeof(double) * n));
+
+  cudaEvent_t start, stop;
+  CUDA_CHECK(cudaEventCreate(&start));
+  CUDA_CHECK(cudaEventCreate(&stop));
+
+  const std::size_t shmem = static_cast<std::size_t>(2) * static_cast<std::size_t>(block) * sizeof(double);
+
+  CUDA_CHECK(cudaEventRecord(start));
+  meanpath_kernel<<<blocks, block, shmem>>>(
+      p.paths, p.steps, p.S0, drift_rate, p.sigma, p.T,
+      p.seed, d_sum, d_sumsq);
+  CUDA_CHECK(cudaGetLastError());
+  CUDA_CHECK(cudaEventRecord(stop));
+  CUDA_CHECK(cudaEventSynchronize(stop));
+
+  float ms = 0.0f;
+  CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
+
+  std::vector<double> h_sum(n, 0.0);
+  std::vector<double> h_sumsq(n, 0.0);
+  CUDA_CHECK(cudaMemcpy(h_sum.data(), d_sum, sizeof(double) * n, cudaMemcpyDeviceToHost));
+  CUDA_CHECK(cudaMemcpy(h_sumsq.data(), d_sumsq, sizeof(double) * n, cudaMemcpyDeviceToHost));
+
+  CUDA_CHECK(cudaEventDestroy(start));
+  CUDA_CHECK(cudaEventDestroy(stop));
+  CUDA_CHECK(cudaFree(d_sum));
+  CUDA_CHECK(cudaFree(d_sumsq));
+
+  MeanPathResult r{};
+  r.mean.resize(n);
+  r.std.resize(n);
+  const double dn = static_cast<double>(p.paths);
+  for (std::size_t i = 0; i < n; ++i) {
+    const double m = h_sum[i] / dn;
+    const double ex2 = h_sumsq[i] / dn;
+    const double var = std::max(ex2 - m * m, 0.0);
+    r.mean[i] = m;
+    r.std[i] = std::sqrt(var);
+  }
+  r.ms = static_cast<double>(ms);
+  return r;
+}
+
+static void write_avg_path_csv(const std::string& path, int steps, double T,
+                               const std::vector<double>& mean,
+                               const std::vector<double>& stdev) {
+  std::ofstream out(path, std::ios::out | std::ios::trunc);
+  if (!out.is_open()) throw std::runtime_error("Failed to open avg-path csv: " + path);
+  out << "step,t_years,mean,std\n";
+  const double dt = T / static_cast<double>(steps);
+  for (int s = 0; s <= steps; ++s) {
+    out << s << "," << (static_cast<double>(s) * dt) << "," << mean[static_cast<std::size_t>(s)]
+        << "," << stdev[static_cast<std::size_t>(s)] << "\n";
+  }
+}
+
+static void write_avg_partial_bin(const std::string& path, int steps, std::int64_t local_paths,
+                                  const std::vector<double>& sum,
+                                  const std::vector<double>& sumsq) {
+  std::ofstream out(path, std::ios::out | std::ios::binary | std::ios::trunc);
+  if (!out.is_open()) throw std::runtime_error("Failed to open partial file: " + path);
+  out.write(reinterpret_cast<const char*>(&steps), sizeof(int));
+  out.write(reinterpret_cast<const char*>(&local_paths), sizeof(std::int64_t));
+  const std::size_t n = static_cast<std::size_t>(steps) + 1;
+  out.write(reinterpret_cast<const char*>(sum.data()), sizeof(double) * n);
+  out.write(reinterpret_cast<const char*>(sumsq.data()), sizeof(double) * n);
+}
+
+static bool read_avg_partial_bin(const std::string& path, int& steps, std::int64_t& local_paths,
+                                 std::vector<double>& sum, std::vector<double>& sumsq) {
+  std::ifstream in(path, std::ios::in | std::ios::binary);
+  if (!in.is_open()) return false;
+  in.read(reinterpret_cast<char*>(&steps), sizeof(int));
+  in.read(reinterpret_cast<char*>(&local_paths), sizeof(std::int64_t));
+  const std::size_t n = static_cast<std::size_t>(steps) + 1;
+  sum.resize(n);
+  sumsq.resize(n);
+  in.read(reinterpret_cast<char*>(sum.data()), sizeof(double) * n);
+  in.read(reinterpret_cast<char*>(sumsq.data()), sizeof(double) * n);
+  return in.good();
 }
 
 static int env_int(const char* name, int fallback) {
@@ -809,6 +1005,7 @@ int main(int argc, char** argv) {
   // Taiwania2 nodes have 8x V100, so you can use --gpus-per-node 8 and --ntasks-per-node 8.
   const int local_id = env_int("SLURM_LOCALID", -1);
   const int proc_id = env_int("SLURM_PROCID", 0);
+  const int ntasks = env_int("SLURM_NTASKS", 1);
 
   std::cout << std::fixed << std::setprecision(6);
   if (have_yahoo) {
@@ -826,6 +1023,121 @@ int main(int argc, char** argv) {
               << " mu=" << p.mu
               << (flags.mu_set ? " (mu overridden by --mu)" : "")
               << "\n";
+  }
+
+  // Avg-path CSV mode (mean/std trajectory). Recommended for CPU vs GPU vs 8GPU scaling comparisons.
+  if (!p.avg_path_csv.empty()) {
+    if (p.assets != 1) {
+      std::cerr << "--avg-path-csv is currently implemented for assets=1 only.\n";
+      return 2;
+    }
+
+    // Determine local paths (for multi-task runs) and total paths for normalization.
+    const std::int64_t total_paths = (p.paths_total > 0) ? p.paths_total : p.paths;
+    std::int64_t local_paths = p.paths;
+    if (ntasks > 1 && p.paths_total > 0) {
+      const std::int64_t base = p.paths_total / ntasks;
+      const std::int64_t rem = p.paths_total % ntasks;
+      local_paths = base + ((proc_id < rem) ? 1 : 0);
+    }
+    if (local_paths <= 0) {
+      std::cerr << "Computed local_paths <= 0. Check --paths-total / ntasks.\n";
+      return 2;
+    }
+
+    // Choose drift rate for simulation.
+    const bool mu_overridden_by_cli = flags.mu_set;
+    double drift_rate = p.r;
+    if (mu_overridden_by_cli) drift_rate = p.mu;
+    else if (have_yahoo && p.use_yahoo_mu) drift_rate = ys.mu_annual;
+    else drift_rate = p.r;
+
+    // Run GPU for local_paths.
+    Params lp = p;
+    lp.paths = local_paths;
+
+    MeanPathResult mp = run_gpu_meanpath_single_asset(lp, drift_rate);
+
+    // Convert mean/std back to sums for reduction (so proc0 can combine).
+    const std::size_t n = static_cast<std::size_t>(p.steps) + 1;
+    std::vector<double> sum(n, 0.0), sumsq(n, 0.0);
+    for (std::size_t i = 0; i < n; ++i) {
+      sum[i] = mp.mean[i] * static_cast<double>(local_paths);
+      // mp.std is population std; reconstruct E[S^2] = Var + mean^2
+      const double ex2 = (mp.std[i] * mp.std[i]) + (mp.mean[i] * mp.mean[i]);
+      sumsq[i] = ex2 * static_cast<double>(local_paths);
+    }
+
+    // Multi-task reduction: each task writes a partial; proc0 merges.
+    if (ntasks > 1) {
+      const std::string partial = p.avg_path_csv + ".partial." + std::to_string(proc_id) + ".bin";
+      write_avg_partial_bin(partial, p.steps, local_paths, sum, sumsq);
+
+      if (proc_id == 0) {
+        // wait for other partial files
+        for (int pid = 0; pid < ntasks; ++pid) {
+          const std::string f = p.avg_path_csv + ".partial." + std::to_string(pid) + ".bin";
+          int tries = 0;
+          while (!file_nonempty(f) && tries < 600) { // up to ~10 min
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            ++tries;
+          }
+          if (!file_nonempty(f)) {
+            std::cerr << "Timeout waiting for partial: " << f << "\n";
+            return 2;
+          }
+        }
+
+        int steps_chk = -1;
+        std::int64_t total_paths_acc = 0;
+        std::vector<double> sum_all(n, 0.0), sumsq_all(n, 0.0);
+        for (int pid = 0; pid < ntasks; ++pid) {
+          const std::string f = p.avg_path_csv + ".partial." + std::to_string(pid) + ".bin";
+          int st = 0;
+          std::int64_t lp_count = 0;
+          std::vector<double> s, ss;
+          if (!read_avg_partial_bin(f, st, lp_count, s, ss)) {
+            std::cerr << "Failed to read partial: " << f << "\n";
+            return 2;
+          }
+          if (steps_chk < 0) steps_chk = st;
+          if (st != steps_chk) {
+            std::cerr << "Partial steps mismatch in " << f << "\n";
+            return 2;
+          }
+          total_paths_acc += lp_count;
+          for (std::size_t i = 0; i < n; ++i) {
+            sum_all[i] += s[i];
+            sumsq_all[i] += ss[i];
+          }
+          std::remove(f.c_str());
+        }
+
+        // Normalize to mean/std and write final CSV.
+        std::vector<double> mean(n, 0.0), stdev(n, 0.0);
+        const double dn = static_cast<double>(total_paths_acc);
+        for (std::size_t i = 0; i < n; ++i) {
+          const double m = sum_all[i] / dn;
+          const double ex2 = sumsq_all[i] / dn;
+          const double var = std::max(ex2 - m * m, 0.0);
+          mean[i] = m;
+          stdev[i] = std::sqrt(var);
+        }
+        write_avg_path_csv(p.avg_path_csv, p.steps, p.T, mean, stdev);
+        std::cout << "Wrote avg-path CSV (reduced): " << p.avg_path_csv
+                  << " total_paths=" << total_paths_acc
+                  << " steps=" << p.steps
+                  << " gpu_time_ms_local=" << mp.ms << "\n";
+      }
+    } else {
+      write_avg_path_csv(p.avg_path_csv, p.steps, p.T, mp.mean, mp.std);
+      std::cout << "Wrote avg-path CSV: " << p.avg_path_csv
+                << " paths=" << local_paths
+                << " steps=" << p.steps
+                << " gpu_time_ms=" << mp.ms << "\n";
+    }
+
+    return 0;
   }
 
   // If requested, dump simulated future paths to CSV (independent from option pricing).
