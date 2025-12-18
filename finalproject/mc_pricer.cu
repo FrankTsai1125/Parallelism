@@ -451,6 +451,68 @@ static void write_result_csv(
   out << "\n";
 }
 
+// For --avg-path-csv mode (trajectory output), we still want per-run performance logs.
+// This uses the same schema as write_result_csv, but writes "avg_path" as type and
+// leaves option-price fields blank.
+static void write_avgpath_bench_csv_gpu(
+    const Params& p,
+    std::int64_t paths_logged,
+    double gpu_time_ms,
+    const cudaDeviceProp& prop,
+    int chosen_device,
+    int proc_id,
+    int local_id,
+    const YahooStats* ys) {
+
+  if (p.out_csv.empty()) return;
+  const bool append = p.out_csv_append;
+  const bool need_header = !append || !file_nonempty(p.out_csv);
+
+  std::ofstream out(p.out_csv, append ? (std::ios::out | std::ios::app) : (std::ios::out | std::ios::trunc));
+  if (!out.is_open()) {
+    throw std::runtime_error("Failed to open out csv: " + p.out_csv);
+  }
+
+  if (need_header) {
+    out << "timestamp_utc,"
+        << "yahoo_csv,yahoo_col,yahoo_S0,yahoo_sigma_annual,yahoo_mu_annual,yahoo_n_prices,yahoo_n_returns,"
+        << "S0,sigma,mu,K,r,T,steps,paths,type,assets,rho,block_size,blocks_per_sm,"
+        << "device,slurm_procid,slurm_localid,seed,"
+        << "gpu_name,cc_major,cc_minor,"
+        << "gpu_price,gpu_std_error,gpu_time_ms,"
+        << "cpu_price,cpu_std_error,cpu_time_ms"
+        << "\n";
+  }
+
+  out << csv_escape(now_timestamp_utc()) << ",";
+
+  if (ys) {
+    out << csv_escape(p.yahoo_csv) << ","
+        << csv_escape(ys->col_used) << ","
+        << ys->S0 << ","
+        << ys->sigma_annual << ","
+        << ys->mu_annual << ","
+        << ys->n_prices << ","
+        << ys->n_returns << ",";
+  } else {
+    out << "," << "," << "," << "," << "," << "," << ",";
+  }
+
+  // Keep schema aligned with option-pricing CSV, but mark type as avg_path and omit option-price fields.
+  out << p.S0 << "," << p.sigma << "," << p.mu << ","
+      << "" << "," // K
+      << p.r << "," << p.T << "," << p.steps << "," << paths_logged << ","
+      << "avg_path" << "," // type
+      << "" << ","         // assets
+      << "" << ","         // rho
+      << p.block_size << "," << "" << "," // block_size, blocks_per_sm (avg-path doesn't use blocks_per_sm)
+      << chosen_device << "," << proc_id << "," << local_id << "," << p.seed << ","
+      << csv_escape(prop.name) << "," << prop.major << "," << prop.minor << ","
+      << "" << "," << "" << "," << gpu_time_ms << "," // gpu price/std/time
+      << "" << "," << "" << "," << ""                // cpu price/std/time
+      << "\n";
+}
+
 static void dump_paths_csv(
     const Params& p,
     const YahooStats* ys,
@@ -1127,6 +1189,21 @@ int main(int argc, char** argv) {
                   << " total_paths=" << total_paths_acc
                   << " steps=" << p.steps
                   << " gpu_time_ms_local=" << mp.ms << "\n";
+
+        // Append performance row to --out-csv (proc0 only).
+        if (!p.out_csv.empty()) {
+          int dev = 0;
+          cudaDeviceProp prop{};
+          CUDA_CHECK(cudaGetDevice(&dev));
+          CUDA_CHECK(cudaGetDeviceProperties(&prop, dev));
+          try {
+            write_avgpath_bench_csv_gpu(p, total_paths_acc, mp.ms, prop, dev, proc_id, local_id, have_yahoo ? &ys : nullptr);
+            std::cout << "Appended bench CSV: " << p.out_csv << "\n";
+          } catch (const std::exception& e) {
+            std::cerr << "CSV write error: " << e.what() << "\n";
+            return 2;
+          }
+        }
       }
     } else {
       write_avg_path_csv(p.avg_path_csv, p.steps, p.T, mp.mean, mp.std);
@@ -1134,6 +1211,21 @@ int main(int argc, char** argv) {
                 << " paths=" << local_paths
                 << " steps=" << p.steps
                 << " gpu_time_ms=" << mp.ms << "\n";
+
+      // Append performance row to --out-csv.
+      if (!p.out_csv.empty()) {
+        int dev = 0;
+        cudaDeviceProp prop{};
+        CUDA_CHECK(cudaGetDevice(&dev));
+        CUDA_CHECK(cudaGetDeviceProperties(&prop, dev));
+        try {
+          write_avgpath_bench_csv_gpu(p, local_paths, mp.ms, prop, dev, proc_id, local_id, have_yahoo ? &ys : nullptr);
+          std::cout << "Appended bench CSV: " << p.out_csv << "\n";
+        } catch (const std::exception& e) {
+          std::cerr << "CSV write error: " << e.what() << "\n";
+          return 2;
+        }
+      }
     }
 
     return 0;
