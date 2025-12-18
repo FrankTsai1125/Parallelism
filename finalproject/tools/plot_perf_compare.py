@@ -50,6 +50,13 @@ def _fmt_speedup(x: float) -> str:
     return f"{x:.2f}×"
 
 
+def _infer_total_threads(df: pd.DataFrame) -> pd.Series:
+    # Optional column; if missing or NaN, we'll leave blank.
+    if "total_threads" not in df.columns:
+        return pd.Series([pd.NA] * len(df))
+    return pd.to_numeric(df["total_threads"], errors="coerce")
+
+
 def main() -> int:
     args = parse_args()
     frames = [
@@ -64,6 +71,7 @@ def main() -> int:
     df["paths"] = pd.to_numeric(df.get("paths"), errors="coerce")
     df["time_ms"] = _infer_time_ms(df)
     df["time_s"] = df["time_ms"] / 1000.0
+    df["total_threads"] = _infer_total_threads(df)
 
     # Filter to avg_path rows if present.
     if "type" in df.columns:
@@ -91,7 +99,10 @@ def main() -> int:
 
     agg = (
         sub.groupby("config", as_index=False)
-        .agg(time_s=("time_s", "median"))
+        .agg(
+            time_s=("time_s", "median"),
+            total_threads=("total_threads", "median"),
+        )
         .sort_values("config")
         .reset_index(drop=True)
     )
@@ -114,11 +125,20 @@ def main() -> int:
     summary.insert(2, "paths", paths0)
     summary.to_csv(out_summary, index=False)
 
+    # Build x-axis labels including thread counts (if present).
+    def _label_row(r: pd.Series) -> str:
+        tt = r.get("total_threads")
+        if pd.isna(tt):
+            return str(r["config"])
+        return f"{r['config']}\nthreads={int(tt)}"
+
+    x_labels = [ _label_row(row) for _, row in summary.iterrows() ]
+
     # Runtime bar
     plt.figure(figsize=(7.5, 4.6), dpi=180)
     ax = plt.gca()
     bars = ax.bar(
-        summary["config"].astype(str),
+        x_labels,
         summary["time_s"],
         color=["#222222", "#1f77b4", "#ff7f0e"],
     )
@@ -136,7 +156,7 @@ def main() -> int:
     plt.figure(figsize=(7.5, 4.6), dpi=180)
     ax = plt.gca()
     bars = ax.bar(
-        summary["config"].astype(str),
+        x_labels,
         summary["speedup_vs_cpu"],
         color=["#222222", "#1f77b4", "#ff7f0e"],
     )
