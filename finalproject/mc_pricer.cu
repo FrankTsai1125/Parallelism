@@ -1207,8 +1207,15 @@ int main(int argc, char** argv) {
 
   if (!p.out_csv.empty()) {
     try {
-      write_result_csv(p, g, have_cpu ? &c : nullptr, prop, chosen_device, proc_id, local_id, have_yahoo ? &ys : nullptr);
-      std::cout << "Wrote result CSV: " << p.out_csv << (p.out_csv_append ? " (append)\n" : "\n");
+      // In multi-task runs (e.g., 2GPU/8GPU), multiple tasks writing the same CSV would race.
+      // Only let proc0 write the summary row.
+      if (ntasks > 1 && proc_id != 0) {
+        std::cout << "Skipping result CSV write on proc " << proc_id
+                  << " (ntasks=" << ntasks << ", only proc0 writes): " << p.out_csv << "\n";
+      } else {
+        write_result_csv(p, g, have_cpu ? &c : nullptr, prop, chosen_device, proc_id, local_id, have_yahoo ? &ys : nullptr);
+        std::cout << "Wrote result CSV: " << p.out_csv << (p.out_csv_append ? " (append)\n" : "\n");
+      }
     } catch (const std::exception& e) {
       std::cerr << "CSV write error: " << e.what() << "\n";
       return 2;

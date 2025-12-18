@@ -38,7 +38,7 @@ STEPS="1000"   # if you want "daily" steps, use 252
 T_YEARS="1"
 YAHOO_CSV="data/2330_TW.csv"
 AVG_OUT="avg_2330_cpu.csv"
-BENCH_OUT="bench_runs.csv"
+BENCH_OUT="cpu.csv"
 
 RUN_ARGS=()
 if [[ "${1:-}" == "--" ]]; then
