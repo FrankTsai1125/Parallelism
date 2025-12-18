@@ -21,8 +21,8 @@ set -o pipefail
 
 PROJECT_ID="ACD114118"
 TIME_MIN="10"
-GPUS_PER_NODE="8"
-NTASKS_PER_NODE="8"
+GPUS_PER_NODE="2"
+NTASKS_PER_NODE="2"
 
 SRC="mc_pricer.cu"
 EXE="mc_pricer"
