@@ -63,6 +63,44 @@ echo "[2/3] Compiling ${SRC} -> ${EXE} ..."
 nvcc "${NVCC_FLAGS[@]}" "${SRC}" -o "${EXE}"
 
 echo "[3/3] Submitting job via srun (1 node, 1 task, 1 GPU)..."
-srun -N 1 -n 1 --gpus-per-node "${GPUS_PER_NODE}" -A "${PROJECT_ID}" -t "${TIME_MIN}" "./${EXE}" "${RUN_ARGS[@]}"
+
+# Perf logs are written on the compute node into the shared filesystem.
+RUN_TAG="${RUN_TAG:-1gpu_$(date -u +%Y%m%dT%H%M%SZ)}"
+export RUN_TAG
+
+srun -N 1 -n 1 --gpus-per-node "${GPUS_PER_NODE}" -A "${PROJECT_ID}" -t "${TIME_MIN}" \
+  bash -lc '
+    set -euo pipefail
+    LOG_ROOT="perf_logs/${RUN_TAG}_job${SLURM_JOB_ID:-unknown}"
+    LOG_DIR="${LOG_ROOT}/proc${SLURM_PROCID:-0}"
+    mkdir -p "${LOG_DIR}"
+
+    {
+      echo "run_tag=${RUN_TAG}"
+      echo "date_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      echo "hostname=$(hostname)"
+      echo "slurm_job_id=${SLURM_JOB_ID:-}"
+      echo "slurm_step_id=${SLURM_STEP_ID:-}"
+      echo "slurm_procid=${SLURM_PROCID:-}"
+      echo "slurm_localid=${SLURM_LOCALID:-}"
+      echo "slurm_ntasks=${SLURM_NTASKS:-}"
+      echo "slurm_cpus_per_task=${SLURM_CPUS_PER_TASK:-}"
+      echo "cuda_visible_devices=${CUDA_VISIBLE_DEVICES:-}"
+      echo "omp_num_threads=${OMP_NUM_THREADS:-}"
+    } > "${LOG_DIR}/meta.txt"
+
+    SMI_PID=""
+    if command -v nvidia-smi >/dev/null 2>&1; then
+      nvidia-smi -q > "${LOG_DIR}/nvidia_smi_q.txt" || true
+      nvidia-smi --query-gpu=timestamp,index,name,utilization.gpu,utilization.memory,memory.used,memory.total \
+        --format=csv -l 1 > "${LOG_DIR}/nvidia_smi.csv" &
+      SMI_PID="$!"
+    fi
+    cleanup() { if [[ -n "${SMI_PID}" ]]; then kill "${SMI_PID}" 2>/dev/null || true; fi; }
+    trap cleanup EXIT
+
+    # Run the executable passed via "$@" and also tee stdout/stderr to files.
+    { /usr/bin/time -v "$@"; } 2> >(tee "${LOG_DIR}/time.txt" >&2) | tee "${LOG_DIR}/stdout.log"
+  ' bash "./${EXE}" "${RUN_ARGS[@]}"
 
 

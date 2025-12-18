@@ -1,0 +1,7 @@
+# Local perf logs / profiling outputs (can be large)
+perf_logs/
+
+# Partial reduction files from multi-task avg-path reduction
+*.partial.*.bin
+
+
