@@ -1,1 +1,0 @@
-g++ -std=c++17 -O3 -pthread -fopenmp -I/opt/ohpc/Taiwania3/pkg/intel/2024/oneapi/tbb/latest/include hw1.cpp -L/opt/ohpc/Taiwania3/pkg/intel/2024/oneapi/tbb/latest/lib/intel64/gcc4.8 -ltbb -o hw1
