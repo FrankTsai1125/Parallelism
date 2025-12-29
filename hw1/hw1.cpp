@@ -41,11 +41,12 @@ struct State {
 // Stores only box positions and player position as encoded integers
 //TODO
 struct CompactState {
+    //用 uint16_t 意味著 y*COLS+x 必須小於 65536（地圖格子總數不能太大），否則會溢位；這通常是作業地圖大小可控時的常見省記憶體技巧。
     vector<uint16_t> boxes;  // Sorted list of box positions (encoded as y*COLS+x)
     uint16_t player_pos;     // Player position (encoded as y*COLS+x)
     
     CompactState() : player_pos(0) {}
-    
+    //給 unordered_map/concurrent_unordered_map 去判斷 key 是否相等：玩家位置相同且箱子位置集合相同 → 同一局面。
     bool operator==(const CompactState &other) const {
         return player_pos == other.player_pos && boxes == other.boxes;
     }
@@ -255,7 +256,11 @@ void computeSimpleDeadlocks() {
 } // namespace
 
 // Convert full State to CompactState
-//TODO
+//它把一個完整 State（整張棋盤字元很多）壓縮成只保留兩種資訊：
+// 玩家位置：player_pos = encodePos(y,x)，把 2D 座標編碼成 1 個整數（通常是 y*COLS + x）。
+// 所有箱子的位置集合：掃棋盤，把每顆箱子的座標也 encodePos 存進 boxes。
+// 也就是說：它不再存整張 board，因為牆/地板/目標等「靜態資訊」已存在全域 baseBoard/targetMap 裡；
+// 每個狀態真正會變的，主要就是「箱子在哪」+「玩家在哪」。
 CompactState compressState(const State &state) {
     CompactState compact;
     compact.player_pos = encodePos(state.player_y, state.player_x);
@@ -271,17 +276,24 @@ CompactState compressState(const State &state) {
     }
     
     // Sort boxes for consistent representation
+    //排序的目的是：讓相同狀態的 CompactState 都長得一樣（方便比較）。
+    // 把 boxes 排序，確保相同狀態的 CompactState 都長得一樣（方便比較）。
     sort(compact.boxes.begin(), compact.boxes.end());
     
     return compact;
 }
 
 // Convert CompactState to full State (for checking win condition, output, etc.)
+//先從靜態底圖開始，再把動態物件貼回去
 State decompressState(const CompactState &compact) {
     State state;
     state.board = baseBoard;  // Start from base board
     
     // Place boxes
+    //把箱子貼回棋盤
+    // 對 compact.boxes 裡每個 boxPos 做 decodePos 還原 (y,x)。
+    // 若 (y,x) 是目標格 targetMap[y][x]==true → 棋盤字元用 X（箱子在目標上）
+    // 否則用 x（箱子在一般地板）
     for (uint16_t boxPos : compact.boxes) {
         auto [y, x] = decodePos(boxPos);
         if (targetMap[y][x]) {
@@ -292,6 +304,10 @@ State decompressState(const CompactState &compact) {
     }
     
     // Place player
+    //把玩家貼回棋盤
+    // decodePos(compact.player_pos) 得到 (py,px)，同時寫回 state.player_y/x。
+    // 依照玩家站的位置底下是什麼字元，決定印成 O（玩家在目標上）或 o（玩家在一般地板）。
+    // 程式也處理了玩家踩到 x/X 的情況並註解 “shouldn’t happen”：代表正常狀態下玩家不應和箱子重疊；這裡是防呆/容錯式寫法。
     auto [py, px] = decodePos(compact.player_pos);
     state.player_y = py;
     state.player_x = px;
@@ -310,9 +326,12 @@ State decompressState(const CompactState &compact) {
 }
 
 // Check if compact state is solved (all boxes on targets)
+//判斷「這個狀態是否已經解完」。解完的定義是：所有箱子都在目標格上。
 bool isSolvedCompact(const CompactState &compact) {
     for (uint16_t boxPos : compact.boxes) {
+        //compact.boxes 裡存的是每顆箱子的座標（壓成 y*COLS+x），用 decodePos 還原成 (y,x)。
         auto [y, x] = decodePos(boxPos);
+        //只要發現某顆箱子不在 targetMap[y][x]==true 的格子上，就立刻 return false。
         if (!targetMap[y][x]) {
             return false;  // Found a box not on target
         }
@@ -433,7 +452,7 @@ inline bool isBox(const State &state, int y, int x) {
     char c = state.board[y][x];
     return c == 'x' || c == 'X';
 }
-
+//若形成 2x2 中都是牆/箱子，且至少有「箱子不在目標上」，通常代表箱子群互相卡死 → 判死。
 bool isStaticSquareDeadlock(const State &state, int top, int left) {
     if (top < 0 || left < 0 || top + 1 >= ROWS || left + 1 >= COLS) {
         return false;
@@ -578,26 +597,32 @@ bool isFrozenBox(const State &state, int y, int x) {
 }
 
 // Check if current state is a deadlock using precomputed simple deadlocks
+//「目前這個狀態（局面）是不是已經必死」，如果必死就回傳 true，用來剪枝（不再往下搜）。
 bool isDeadState(const State &state) {
     for (int y = 0; y < static_cast<int>(state.board.size()); ++y) {
         for (int x = 0; x < static_cast<int>(state.board[y].size()); ++x) {
             char c = state.board[y][x];
+            //對每一個箱子格（c == 'x' || c == 'X'）依序做幾種檢查，只要任何一種成立，就直接 return true：
             if (c == 'x' || c == 'X') {
                 // Check if box is in a simple deadlock square (precomputed)
+                //在computeSimpleDeadlocks() 已經算好「哪些格子是簡單死局」；直接查 deadCellMap 就好。
                 if (y < static_cast<int>(deadCellMap.size()) && x < static_cast<int>(deadCellMap[y].size()) &&
                     deadCellMap[y][x]) {
                     return true;
                 }
                 // Check if box is on a fragile tile (@)
+                //作業規格說 @ 上「不能有箱子」，所以只要發現箱子在 baseBoard[y][x]=='@' 就立即判死（非法/無解）。
                 if (baseBoard[y][x] == '@') {
                     return true;
                 }
                 // Advanced deadlock: frozen box (only for boxes not on targets)
+                //箱子在水平與垂直兩個方向都被牆/死格/其他箱子鎖住，導致再也推不動（且不在目標上），就判死。
                 if (c == 'x' && isFrozenBox(state, y, x)) {
                     return true;
                 }
 
                 if (c == 'x') {
+                    //offsets 的 4 個偏移是為了檢查所有「可能包含這顆箱子」的 2x2 小方塊（箱子可能在方塊的右下/左下/右上/左上）。
                     static const int offsets[4][2] = {{0, 0}, {-1, 0}, {0, -1}, {-1, -1}};
                     for (const auto &off : offsets) {
                         int top = y + off[0];
@@ -631,34 +656,46 @@ int dirIndexFromChar(char c) {
         return -1;
     }
 }
-
+//嘗試做「一步動作」：
+//可能是走一步（前方是空地/目標/fragile）
+//也可能是推箱一步（前方是箱子且箱子後方是空地或目標）
+//如果不合法就回 false，合法則把新狀態寫到 out 並回 true
 bool tryMove(const State &current, int dir, State &out) {
+    //先算出玩家要走到哪一格（ny,nx），以及推箱後箱子會到哪一格（nny,nnx）。
     int ny = current.player_y + dy[dir];
     int nx = current.player_x + dx[dir];
     int nny = ny + dy[dir];
     int nnx = nx + dx[dir];
-
+    //如果玩家走一步超過地圖邊界，直接回 false。
     if (ny < 0 || ny >= static_cast<int>(current.board.size()) || nx < 0 || nx >= static_cast<int>(current.board[0].size())) {
         return false;
     }
-
+    //先把 current 複製給 out，避免直接修改 current（避免多執行緒 race condition）。
     out = current;
     char target = current.board[ny][nx];
 
     if (target == ' ') {
+        //走到一般地板 ' '：把新位置設成 'o'（player on floor）
         out.board[ny][nx] = 'o';
     } else if (target == '.') {
+        //走到目標地板 '.'：把新位置設成 'O'（player on target）
         out.board[ny][nx] = 'O';
     } else if (target == '@') {
+        //走到脆弱地板 '@'：把新位置設成 '!'（player on fragile）
         out.board[ny][nx] = '!';
+        //遇到箱子 'x'/'X'：嘗試推箱
     } else if (target == 'x' || target == 'X') {
+        //走到箱子 x/X：要先檢查推箱後的箱子位置是否合理（不能超出地圖）
         if (nny < 0 || nny >= static_cast<int>(current.board.size()) || nnx < 0 || nnx >= static_cast<int>(current.board[0].size())) {
             return false;
         }
+        //boxTarget 必須是 ' ' 或 '.'（箱子只能被推到空地或目標；不能推到牆、另一箱子、fragile 等）
         char boxTarget = current.board[nny][nnx];
         if (boxTarget != ' ' && boxTarget != '.') {
             return false;
         }
+        // 玩家走到原箱子位置：若原箱子在地板 'x'，玩家變 'o'；若箱子在目標 'X'，玩家變 'O'
+        // 箱子被推到 boxTarget：若推到 ' ' 變 'x'；若推到 '.' 變 'X'
         if (target == 'x') {
             out.board[ny][nx] = 'o';
         } else {
@@ -672,7 +709,10 @@ bool tryMove(const State &current, int dir, State &out) {
     } else {
         return false;
     }
-
+    // 這段是在做「玩家離開原格後，那格應該變回什麼」：
+    // 原本是 'o'（玩家在地板）→ 離開後變回 ' '
+    // 原本是 '!'（玩家在 fragile）→ 離開後變回 '@'
+    // 否則（通常是 'O'，玩家在目標）→ 離開後變回 '.'
     char oldPos = current.board[current.player_y][current.player_x];
     if (oldPos == 'o') {
         out.board[current.player_y][current.player_x] = ' ';
@@ -681,57 +721,62 @@ bool tryMove(const State &current, int dir, State &out) {
     } else {
         out.board[current.player_y][current.player_x] = '.';
     }
-
+    //更新玩家位置
     out.player_y = ny;
     out.player_x = nx;
     return true;
 }
 
 struct ReachableInfo {
-    vector<int> parent;
-    vector<char> move;
-    int startIndex = -1;
+    //大小是 ROWS*COLS，因為每個格子都要記錄 parent 和 move。
+    vector<int> parent; //BFS 樹上，節點 v 是從哪個節點走過來的
+    vector<char> move;  //從 parent[v] 走到 v 用的方向字元（W/A/S/D）
+    int startIndex = -1; //玩家起始位置的 index（方便回朔路徑）
 };
 
+// 這個函式在做 BFS（廣度優先搜尋），找出「在不推箱子的前提下，玩家從目前位置能走到哪些格子」，
+// 並且記錄每個格子的 上一格 parent 與 走到這格用的方向字元 move，讓之後可以重建走路路徑。
+// 輸入：目前局面 state（含玩家位置、棋盤）。
+// 輸出：ReachableInfo，裡面至少有 parent[]、move[]、startIndex。
 ReachableInfo computeReachable(const State &state) {
-    ReachableInfo info;
-    int total = ROWS * COLS;
-    info.parent.assign(total, -1);
-    info.move.assign(total, '?');
+    ReachableInfo info;//宣告結果物件 info，用來裝 BFS 的結果。
+    int total = ROWS * COLS;//總格子數
+    info.parent.assign(total, -1); //初始都設成 -1 表示「尚未拜訪 / 不可達」。
+    info.move.assign(total, '?'); //初始都設成 '?' 表示「尚未決定要用哪個方向字元」。
 
-    if (total == 0) {
+    if (total == 0) { //地圖空的就直接回傳（避免後面除以 COLS 或存取陣列出事）。
         return info;
     }
 
-    queue<int> q;
-    int startIdx = state.player_y * COLS + state.player_x;
-    info.parent[startIdx] = startIdx;
-    info.startIndex = startIdx;
-    q.push(startIdx);
+    queue<int> q;//BFS 的 queue（廣搜用）。
+    int startIdx = state.player_y * COLS + state.player_x; //把玩家起點座標編碼成 1D index。
+    info.parent[startIdx] = startIdx; //自己走到自己，表示起點。
+    info.startIndex = startIdx; //記下 BFS 的起點 index，給重建路徑用。回溯時可以用 idx != startIdx 當終止條件
+    q.push(startIdx); //把起點加進 queue，準備擴展。
 
-    while (!q.empty()) {
-        int idx = q.front();
+    while (!q.empty()) { //queue 裡還有節點就取出擴展鄰居。
+        int idx = q.front(); //取出目前要擴展的格子 index。
         q.pop();
-        int y = idx / COLS;
+        int y = idx / COLS; //把 1D index 還原成 2D 座標。
         int x = idx % COLS;
 
-        for (int dir = 0; dir < 4; ++dir) {
-            int ny = y + dy[dir];
+        for (int dir = 0; dir < 4; ++dir) { //嘗試四方向走一步。
+            int ny = y + dy[dir]; //走一步之後
             int nx = x + dx[dir];
-            if (!isWithin(ny, nx)) {
+            if (!isWithin(ny, nx)) { //走一步超過地圖邊界，直接略過。
                 continue;
             }
-            char tile = state.board[ny][nx];
-            if (tile == '#' || tile == 'x' || tile == 'X') {
+            char tile = state.board[ny][nx]; //檢查走一步之後的格子是什麼字元。
+            if (tile == '#' || tile == 'x' || tile == 'X') { //走一步之後的格子是牆/箱子/目標，直接略過。
                 continue;
             }
             int nidx = ny * COLS + nx;
-            if (info.parent[nidx] != -1) {
+            if (info.parent[nidx] != -1) { //如果走一步之後的格子已經拜訪過，直接略過。
                 continue;
             }
-            info.parent[nidx] = idx;
-            info.move[nidx] = directions[dir];
-            q.push(nidx);
+            info.parent[nidx] = idx; //記錄走一步之後的格子的 parent 是 idx。
+            info.move[nidx] = directions[dir]; //記錄走一步之後的格子用的方向字元。
+            q.push(nidx); //把走一步之後的格子加進 queue，準備擴展。
         }
     }
 
@@ -740,17 +785,22 @@ ReachableInfo computeReachable(const State &state) {
 
 string reconstructPath(int idx, const ReachableInfo &info) {
     string path;
+    //idx == -1 或 info.parent[idx] == -1 表示「這個位置沒有 parent」，表示這是起始位置，沒有路徑。
     if (idx == -1 || info.parent[idx] == -1) {
         return path;
     }
+    //從目標 idx 一路沿 parent 倒退回 startIndex，沿途把 move[idx] 收集起來（注意：這時收集到的是「反向」的）。
     while (idx != info.startIndex) {
         path.push_back(info.move[idx]);
         idx = info.parent[idx];
     }
+    //把反向路徑翻成正向，得到「起點 → idx」的正確指令序列。
     reverse(path.begin(), path.end());
     return path;
 }
-
+//把 moves 字串裡的每個方向字元（W/A/S/D）轉成數字，再依序 call tryMove() 嘗試推箱。
+//如果推箱失敗（tryMove() 回傳 false），就立刻 return false，表示 moves 無法完整執行。
+//如果順利推完所有箱子，就把最後的 current 狀態 copy 給 out，並回傳 true。
 bool applyMoves(const State &start, const string &moves, State &out) {
     State current = start;
     for (char mv : moves) {
@@ -769,7 +819,14 @@ bool applyMoves(const State &start, const string &moves, State &out) {
 }
 
 // Hungarian Algorithm (Kuhn-Munkres) for minimum cost bipartite matching, O(n^3)
+//匈牙利演算法，最小匹配成本
 int hungarian(const vector<vector<int>> &cost) {
+    // 前處理：把矩陣補成正方形
+    // n = cost.size()：左邊元素數（例如箱子數）
+    // m = cost[0].size()：右邊元素數（例如目標數）
+    // N = max(n,m)：匈牙利演算法常用正方形版本，所以把矩陣補成 N×N
+    // a 初始化為 0，再把原本 cost 填進左上角
+    // 補的那一塊用 0 意味著「多出來的虛擬列/欄成本為 0」（在指派問題中等價於加入 dummy worker/job）
     if (cost.empty() || cost[0].empty()) return 0;
     
     int n = static_cast<int>(cost.size());
@@ -832,7 +889,9 @@ int hungarian(const vector<vector<int>> &cost) {
 }
 
 // A* heuristic for CompactState with adaptive matching
-//TODO
+//它估計「距離解還有多遠」：用箱子到目標的距離當作估計值。
+// 越準通常搜尋越快（A* 會優先展開 f=g+h 小的狀態）。
+//箱子要到目標至少要移動這麼多格（雖然推箱有牆/障礙，這仍是常見的下界估計方式）。
 int calculateHeuristicCompact(const CompactState &compact) {
     int n = static_cast<int>(compact.boxes.size());
     int m = static_cast<int>(targetPositions.size());
@@ -842,6 +901,11 @@ int calculateHeuristicCompact(const CompactState &compact) {
     int matchCost = 0;
     
     // Use Hungarian algorithm for complex cases (5-15 boxes)
+// Hungarian（n 在 5~15）
+// 建 n×m 的距離矩陣後用匈牙利演算法做一對一最佳配對，得到「總距離最小」。
+// 為什麼較準：它會避免兩顆箱子都“貪心地選同一個最近目標”造成的低估/失真。
+// 為什麼限制範圍：匈牙利 O(N^3)，箱子太多會很慢。
+
     if (n >= 5 && n <= 15) {
         // Build cost matrix (box → target Manhattan distance)
         vector<vector<int>> cost(n, vector<int>(m, 0));
@@ -855,6 +919,10 @@ int calculateHeuristicCompact(const CompactState &compact) {
         matchCost = hungarian(cost);
     } else {
         // For simple cases, use greedy matching (faster)
+        //Greedy（其他情況）
+        //對每顆箱子，找它到「任一目標」的最小曼哈頓距離，全部加總。
+        //為什麼快：只要掃一遍目標，不用做全域最佳匹配。
+        //缺點：可能把多顆箱子都算到同一個目標（不符合一對一），所以 heuristic 可能偏鬆（不夠準）。
         for (uint16_t boxPos : compact.boxes) {
             auto [by, bx] = decodePos(boxPos);
             int minDist = INT_MAX;
@@ -870,17 +938,24 @@ int calculateHeuristicCompact(const CompactState &compact) {
 }
 
 // Priority queue item for A*
-//TODO
 struct PQItem {
+    // 功用：這是 A* 的 priority queue 裡的「元素型別」。
+    // stateIdx：這個節點對應到 states[stateIdx]
+    // priority：A* 的 f=g+h，用來決定先展開誰（越小越優先）
     int stateIdx;
     int priority; // f = g + h
-    
+    // 讓容器可以比較兩個 PQItem 哪個「比較大」。
+    // 搜尋裡用的是 tbb::concurrent_priority_queue<PQItem, greater<PQItem>>：
+    // greater 會依賴比較運算來做「最小 priority 先出」（等價於 min-heap 行為）
+    // 所以 operator> 定義的就是「priority 較大則更大」
     bool operator>(const PQItem &other) const {
         return priority > other.priority;
     }
 };
 
 // Build solution path from CompactState vector
+//這個函式在做 回朔（reconstruct）完整輸出字串。因為你的搜尋每一步主要代表「推箱一次」，
+//但輸出要求是「玩家走路 + 推箱」的完整 WASD 序列，所以它要把每步推箱前的走路段補回來。
 string buildSolutionPathCompact(int idx, const vector<int> &parents, const vector<char> &pushDirs, const vector<int> &prePushIndices,
                          const vector<CompactState> &states) {
     vector<string> segments;
@@ -914,7 +989,9 @@ struct CandidateMove {
     int by, bx, ty, tx;
 };
 
-//平行化的 A\* 搜尋 Sokoban 解
+//平行化的 A* 搜尋 Sokoban 解
+//用 A\* 搜尋「推箱子」的狀態圖，但把工作分給多個 std::thread 平行跑；共享的 open list 用 TBB 的 concurrent_priority_queue，去重用 TBB 的 concurrent_unordered_map，
+//而「狀態池與回朔資訊」用 vector 存、用 mutex 保護寫入。
 // TBB Concurrent BFS: Fully parallelized A* with CompactState and thread-safe containers
 string solveWithConcurrentBFS(const State &initialState, bool enableDeadCheck) {
     //如果有開啟剪枝（enableDeadCheck==true），先檢查初始狀態是不是死局 isDeadState(initialState)。
@@ -924,6 +1001,9 @@ string solveWithConcurrentBFS(const State &initialState, bool enableDeadCheck) {
     }
 
     // TBB concurrent containers - thread-safe without explicit locks!
+    //A\* 每次要拿出最小 f=g+h 的節點擴展。
+    //多執行緒會同時 pop/push，如果用普通 std::priority_queue 會需要大鎖；
+    //用 TBB 的 concurrent 容器可以減少自己寫鎖的複雜度。
     tbb::concurrent_priority_queue<PQItem, greater<PQItem>> pq;
     vector<CompactState> states;  //states 存所有已建立的狀態（用 CompactState 省記憶體）。用「索引」代表狀態，方便存 parent/路徑資訊與回朔。
     vector<int> parents; //parents[i] 記錄狀態 i 的父狀態索引。最後找到解時可以回朔整條解路徑。
@@ -1005,18 +1085,18 @@ string solveWithConcurrentBFS(const State &initialState, bool enableDeadCheck) {
             // Process each item in the batch
             for (const auto& item : batch) {
                 if (solution_found.load()) break;
-            
-            int currentIdx = item.stateIdx;
-            
-            // Get current compact state
-            CompactState currentCompact;
-            {
-                lock_guard<mutex> lock(states_mtx);
-                if (currentIdx >= static_cast<int>(states.size())) {
-                    continue;
+
+                int currentIdx = item.stateIdx;
+
+                // Get current compact state
+                CompactState currentCompact;
+                {   //鎖住後 copy 出 currentCompact，避免多執行緒同時存取 states 造成 race condition。
+                    lock_guard<mutex> lock(states_mtx);
+                    if (currentIdx >= static_cast<int>(states.size())) {
+                        continue;
+                    }
+                    currentCompact = states[currentIdx];
                 }
-                currentCompact = states[currentIdx];
-            }
             
             // Check if solved
             if (isSolvedCompact(currentCompact)) {
@@ -1026,7 +1106,9 @@ string solveWithConcurrentBFS(const State &initialState, bool enableDeadCheck) {
             }
             
             // Decompress and compute reachable positions
-            State currentState = decompressState(currentCompact);
+            //解壓+算可達區很貴；能早停就早停。
+            State currentState = decompressState(currentCompact); //解壓回完整棋盤局面（需要走路/推箱模擬）。
+            //提供給下面 for 迴圈使用。
             ReachableInfo reach = computeReachable(currentState);
             if (reach.startIndex == -1) {
                 continue;
@@ -1037,19 +1119,21 @@ string solveWithConcurrentBFS(const State &initialState, bool enableDeadCheck) {
             vector<int> newIndices;
             vector<char> newDirs;
             vector<int> newHeuristics;
-            
+            //外層掃 (y,x) 並用 reach.parent[idx] != -1 篩選，只處理「玩家能走到」的站位格。
             for (int y = 0; y < ROWS; ++y) {
                 for (int x = 0; x < COLS; ++x) {
                     int idx = y * COLS + x;
+                    //computeReachable() 已經算好可達性（含 parent）；直接掃全圖 + O(1) 判斷
                     if (reach.parent[idx] == -1) {
                         continue;
                     }
                     
                     string movePath;
+                    //重建「玩家走到 (y,x)」的路徑，並把 currentState 走到 afterWalk（玩家位置更新）
                     if (idx != reach.startIndex) {
                         movePath = reconstructPath(idx, reach);
                     }
-                    
+                    //推箱的合法性取決於玩家最後站哪；所以要先把玩家走到正確位置，再嘗試推。
                     State afterWalk;
                     if (!movePath.empty()) {
                         if (!applyMoves(currentState, movePath, afterWalk)) {
@@ -1058,30 +1142,35 @@ string solveWithConcurrentBFS(const State &initialState, bool enableDeadCheck) {
                     } else {
                         afterWalk = currentState;
                     }
-                    
+                    //四方向推箱判斷（by,bx 是箱子格；ty,tx 是箱子被推到的格）
                     for (int dir = 0; dir < 4; ++dir) {
                         int by = y + dy[dir];
                         int bx = x + dx[dir];
                         int ty = by + dy[dir];
                         int tx = bx + dx[dir];
+                        //界內：避免越界
                         if (!isWithin(by, bx) || !isWithin(ty, tx)) {
                             continue;
                         }
+                        //(by,bx) 要是箱子 x/X
                         char boxTile = afterWalk.board[by][bx];
                         if (boxTile != 'x' && boxTile != 'X') {
                             continue;
                         }
+                        //(ty,tx) 必須是可進入的空地（' ' 或 '.'）
                         char targetTile = afterWalk.board[ty][tx];
                         if (targetTile != ' ' && targetTile != '.') {
                             continue;
                         }
-                        
+                        //enableDeadCheck 開啟時，(ty,tx) 必須是 goalReachable[ty][tx]（理論上能被推到目標）。
+                        //如果箱子推到 (ty,tx) 這格在「靜態分析」下永遠不可能到任何目標，就不展開。
                         if (enableDeadCheck && !goalReachable[ty][tx]) {
                             continue;
                         }
 
                         // EARLY prune: check if target position is a corner deadlock
                         // Only prune corner deadlocks (safest strategy)
+                        //如果 (ty,tx) 不是目標格，且推過去後會落在牆角（上下左右形成角），直接剪掉。
                         if (enableDeadCheck && !targetMap[ty][tx]) {
                             bool up = isWall(ty - 1, tx);
                             bool down = isWall(ty + 1, tx);
@@ -1091,24 +1180,25 @@ string solveWithConcurrentBFS(const State &initialState, bool enableDeadCheck) {
                                 continue;  // Corner deadlock
                             }
                         }
-                        
+                        //真正模擬「推箱」那一步，得到新狀態 pushed（棋盤、玩家位置、箱子位置都更新）。
                         State pushed;
                         if (!tryMove(afterWalk, dir, pushed)) {
                             continue;
                         }
-                        
-                    if (enableDeadCheck && isDeadState(pushed)) {
+                        //推箱後要是死局，直接剪掉。
+                        if (enableDeadCheck && isDeadState(pushed)) {
                             continue;
                         }
-                        
                         // Compress to CompactState
+                        //將新的狀態壓縮
                         CompactState pushedCompact = compressState(pushed);
                         
                         // Check visited - TBB map is thread-safe!
+                        //如果新狀態已經在 visited 裡，表示已經擴展過，直接剪掉。
                         if (visited.find(pushedCompact) != visited.end()) {
                             continue;
                         }
-                        
+                        //對新狀態計算 heuristic，並把新狀態的資訊存到 newStates、newIndices、newDirs、newHeuristics。
                         int h = calculateHeuristicCompact(pushedCompact);
                         newStates.push_back(pushedCompact);
                         newIndices.push_back(idx);
@@ -1119,39 +1209,42 @@ string solveWithConcurrentBFS(const State &initialState, bool enableDeadCheck) {
             }
             
             // Add new states
+            //把 newStates 裡的狀態加進 states 池，並更新 parents、pushDirs、prePushIndices、gScore。
             int currentG;
-            {
+            {   //用一個大鎖保證一致性，鎖住後 copy 出 currentG，避免多執行緒同時存取 gScore 造成 race condition。
                 lock_guard<mutex> lock(states_mtx);
-                if (currentIdx >= static_cast<int>(gScore.size())) {
+                if (currentIdx >= static_cast<int>(gScore.size())) { 
                     continue;
                 }
-                currentG = gScore[currentIdx];
+                currentG = gScore[currentIdx];//取出「當前狀態的成本 g」
                 
                 for (size_t i = 0; i < newStates.size(); ++i) {
                     // Try to insert - TBB map handles concurrency!
+                    //用 TBB 的 concurrent_unordered_map 插入新狀態，如果已經在 visited 裡，表示已經擴展過，直接剪掉。
                     auto result = visited.insert(make_pair(newStates[i], static_cast<int>(states.size())));
+                    //result.second == false 表示別的 thread 已經插過（已看過），那就略過這個狀態
                     if (!result.second) {
                         // Already visited
                         continue;
                     }
-                    
+                    //如果沒看過，就把它加進 states 池，並更新 parents、pushDirs、prePushIndices、gScore。
                     states.push_back(newStates[i]);
                     parents.push_back(currentIdx);
                     pushDirs.push_back(newDirs[i]);
                     prePushIndices.push_back(newIndices[i]);
                     
-                    int newIndex = static_cast<int>(states.size()) - 1;
-                    int newG = currentG + 1;
+                    int newIndex = static_cast<int>(states.size()) - 1; //新狀態在 states 裡的索引
+                    int newG = currentG + 1; //新狀態的成本 g
                     gScore.push_back(newG);
                     
-                    if (isSolvedCompact(newStates[i])) {
+                    if (isSolvedCompact(newStates[i])) { //如果新狀態已經 solved
                         solution_found = true;
                         solution_idx = newIndex;
                         break;
                     }
                     
-                    int newF = newG + newHeuristics[i];
-                    pq.push({newIndex, newF});
+                    int newF = newG + newHeuristics[i]; //新狀態的 f=g+h
+                    pq.push({newIndex, newF}); //把新狀態丟進 priority queue
                 }
             }
             
