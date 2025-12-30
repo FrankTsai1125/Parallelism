@@ -2,3 +2,9 @@ ssh ^
   -o MACs=hmac-sha2-512,hmac-sha2-256 ^
   -o Ciphers=aes128-ctr,aes256-ctr ^
   p13922006@ln01.twcc.ai
+
+
+scp -P 22 -r ^
+  -o MACs=hmac-sha2-512,hmac-sha2-256 ^
+  -o Ciphers=aes128-ctr,aes256-ctr ^
+  p13922006@ln01.twcc.ai:/home/p13922006/hw4 C:\Users\admin\
