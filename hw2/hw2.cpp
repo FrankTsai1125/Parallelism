@@ -38,14 +38,14 @@ int main(int argc, char *argv[])
     
     auto start = std::chrono::high_resolution_clock::now();
     
-    // Load and broadcast image
+    // rank 0 讀取圖片，並且幫圖片轉灰階
     Image img;
     if (world_rank == 0) {
         img = Image(input_img);
         img = img.channels == 1 ? img : rgb_to_grayscale(img);
     }
     
-    // Broadcast image to all ranks
+    // rank 0 廣播圖片到所有rank
     mpi_broadcast_image(img, 0, MPI_COMM_WORLD);
     
     // Compute octave partition
@@ -53,8 +53,8 @@ int main(int argc, char *argv[])
     std::vector<int> octave_starts, octave_counts;
     compute_octave_partition(total_octaves, world_size, octave_starts, octave_counts);
     
-    int my_start_octave = octave_starts[world_rank];
-    int my_num_octaves = octave_counts[world_rank];
+    int my_start_octave = octave_starts[world_rank]; //取出當前這個 rank 的起始 octave」。
+    int my_num_octaves = octave_counts[world_rank]; //取出當前這個 rank 要做幾個 octave
     
     // Each rank processes its assigned octaves
     std::vector<Keypoint> local_kps;
@@ -84,7 +84,7 @@ int main(int argc, char *argv[])
     std::vector<Keypoint> kps = mpi_gather_keypoints(local_kps, 0, MPI_COMM_WORLD);
 
 
-    // Only rank 0 writes output
+    // 只讓 rank0 寫檔/存圖/印時間
     if (world_rank == 0) {
         /////////////////////////////////////////////////////////////
         // The following code is for the validation

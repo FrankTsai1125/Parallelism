@@ -182,6 +182,13 @@ Image Image::resize(int new_w, int new_h, Interpolation method) const
     
     if (method == Interpolation::NEAREST) {
         // Optimized nearest neighbor
+        //parallel for：建立一個 thread team，並把後面的迴圈工作分配給 threads。
+        // collapse(2)：把兩層巢狀迴圈 for y + for x 「攤平」成一個 2D iteration space 交給 OpenMP 分配。
+        // 等價概念：把每個 (y,x) 當成一個獨立工作單元，總工作數約是 new_h * new_w。
+        // 好處：若 new_h 不大或某些 y 行工作不均，collapse 能讓分配更平均。
+        // schedule(static)：靜態排程。OpenMP 會在迴圈開始前就把「固定範圍」的 (y,x) 工作切給每個 thread。
+        // 好處：排程 overhead 最低、cache locality 常常也比較好。
+        // 代價：若不同 (y,x) 工作量差異很大，static 可能不平衡；但 resize 每個 pixel 工作量幾乎一樣，所以 static 很適合。
         #pragma omp parallel for collapse(2) schedule(static)
         for (int y = 0; y < new_h; y++) {
             for (int x = 0; x < new_w; x++) {
@@ -249,7 +256,7 @@ Image rgb_to_grayscale(const Image& img)
     const float* g_data = img.data + w * h;
     const float* b_data = img.data + 2 * w * h;
     float* gray_data = gray.data;
-    
+    //平行化，使用static method，因為每個 pixel 的工作量幾乎一樣。
     #pragma omp parallel for schedule(static)
     for (int idx = 0; idx < w * h; idx++) {
         gray_data[idx] = 0.299f * r_data[idx] + 
@@ -281,9 +288,10 @@ Image gaussian_blur(const Image& img, float sigma)
 }
 
 // Memory-optimized version: reuses tmp buffer to avoid repeated allocations
+//新增外部暫存 buffer 指標（供呼叫端重複使用），省配置/釋放成本（效能提升）
 Image gaussian_blur(const Image& img, float sigma, Image* reuse_tmp)
 {
-    assert(img.channels == 1);
+    assert(img.channels == 1); //只支援單通道（灰階）圖片
 
     int size = std::ceil(6 * sigma);
     if (size % 2 == 0)
@@ -300,6 +308,7 @@ Image gaussian_blur(const Image& img, float sigma, Image* reuse_tmp)
         kernel.data[k] /= sum;
 
     // Reuse tmp buffer if provided and size matches
+    //重用 tmp 可以降低大量配置成本（pyramid 內 blur 會跑很多次）。
     Image tmp;
     if (reuse_tmp && reuse_tmp->width == img.width && 
         reuse_tmp->height == img.height && reuse_tmp->channels == 1) {
@@ -319,14 +328,36 @@ Image gaussian_blur(const Image& img, float sigma, Image* reuse_tmp)
 
     // convolve vertical - optimized for cache and vectorization
     // Handle border separately for better performance
+    //分開處理邊界可以避免在迴圈內做邊界檢查，提高效能。
+    //開始平行化
+    //parallel 區塊內的 code 會被平行化，但是要注意會有 race condition，所以需要用 reduction。
+    //啟動多個 thread 來處理。
+    //OpenMP 會 建立一個 thread team（預設 thread 數量由：OMP_NUM_THREADS、或omp_set_num_threads()、或runtime/系統預設）
+    //這些 threads 會一起執行大括號 { ... } 裡的程式碼。
+    //但不是每個 thread 永遠固定只做 Interior/Top/Bottom 其中之一。
     #pragma omp parallel
     {
         // Interior (no boundary checks needed)
+        //把 y=center..h-center-1 的 rows 靜態分配給 thread，
+        //算完不需要 barrier（因為接下來 top/bottom 
+        //也在同一 parallel 區塊內，各自獨立寫不同 y）。
+        //static 表示分配好就不會再動，
+        //nowait 表示不需要等待所有 thread 都完成。
+        //在 parallel 區塊裡，每遇到一個 #pragma omp for：
+        //它不是再開一組新的 threads。
+        //它是把「接下來那個 for 迴圈的 iteration（這裡是 y 的範圍）」分配給同一個 thread 去做。
+        //每一個thread 都有自己個center 值
+        //每一個thread 負責的 y 範圍是 center..h-center-1
+        //有些 threads 很快做完 Interior 自己的 y-chunk → 立刻去做 Top border 的 y-chunk
+        //同時間可能還有其他 threads 還在跑 Interior 的 y-chunk。
         #pragma omp for schedule(static) nowait
         for (int y = center; y < h - center; y++) {
             int y_base = y * w;
             for (int x = 0; x < w; x++) {
                 float sum = 0.0f;
+                //允許編譯器向量化 k-loop，並做 reduction
+                //這是 SIMD 向量化的 reduction（同一個 thread 裡，向量 lanes 的加總），
+                //不是 OpenMP threads 之間的 atomic add。
                 #pragma omp simd reduction(+:sum)
                 for (int k = 0; k < size; k++) {
                     sum += img_data[(y - center + k) * w + x] * kern_data[k];
@@ -336,6 +367,9 @@ Image gaussian_blur(const Image& img, float sigma, Image* reuse_tmp)
         }
         
         // Top border
+        //把 y=0..center-1 的 rows 靜態分配給 threads，
+        //算完不需要 barrier（因為接下來 bottom 
+        //也在同一 parallel 區塊內，各自獨立寫不同 y）。
         #pragma omp for schedule(static) nowait
         for (int y = 0; y < center; y++) {
             int y_base = y * w;
@@ -351,6 +385,9 @@ Image gaussian_blur(const Image& img, float sigma, Image* reuse_tmp)
         }
         
         // Bottom border
+        //把 y=h-center..h-1 的 rows 靜態分配給 threads，
+        //算完不需要 barrier（因為接下來 top 
+        //也在同一 parallel 區塊內，各自獨立寫不同 y）。
         #pragma omp for schedule(static) nowait
         for (int y = h - center; y < h; y++) {
             int y_base = y * w;

@@ -66,6 +66,7 @@ ScaleSpacePyramid generate_gaussian_pyramid(const Image& img, float sigma_min,
 }
 
 // generate pyramid of difference of gaussians (DoG) images
+//避免「每張 DoG 先 copy 再減」的大量額外拷貝，且 octave 間平行化，省記憶體峰值。
 ScaleSpacePyramid generate_dog_pyramid(const ScaleSpacePyramid& img_pyramid)
 {
     ScaleSpacePyramid dog_pyramid = {
@@ -74,7 +75,10 @@ ScaleSpacePyramid generate_dog_pyramid(const ScaleSpacePyramid& img_pyramid)
         std::vector<std::vector<Image>>(img_pyramid.num_octaves)
     };
     
-    // Parallel over octaves
+    // Parallel over octaves 執行緒平行化
+    //把外層 i = 0..num_octaves-1 的工作切給多個 CPU threads 同時做。
+    //因為「建立 DoG」對每個 octave 的工作量相對可預期
+    // （每個 octave 就是一組固定大小的圖做固定次數的逐像素相減），所以 static 最適合。
     #pragma omp parallel for schedule(static)
     for (int i = 0; i < dog_pyramid.num_octaves; i++) {
         dog_pyramid.octaves[i].reserve(dog_pyramid.imgs_per_octave);
@@ -89,7 +93,9 @@ ScaleSpacePyramid generate_dog_pyramid(const ScaleSpacePyramid& img_pyramid)
             const float* src_prev = img_pyramid.octaves[i][j-1].data;
             float* dst = diff.data;
             
-            // Parallel over pixels
+            // Parallel over pixels  向量化層級的平行化
+            //在某個 thread 內，把 pix_idx 迴圈用 CPU 的 SIMD 指令（AVX/SSE）一次算多個像素。
+            //它不會開新 threads，而是同一個 thread 內「一個迴圈做向量化」。
             #pragma omp simd
             for (int pix_idx = 0; pix_idx < diff.size; pix_idx++) {
                 dst[pix_idx] = src_curr[pix_idx] - src_prev[pix_idx];
@@ -250,7 +256,19 @@ std::vector<Keypoint> find_keypoints(const ScaleSpacePyramid& dog_pyramid, float
     {
         std::vector<Keypoint> local_keypoints;
         local_keypoints.reserve(500); // Pre-allocate to reduce reallocation
-        
+        //這段工作量「非常不均勻」。 所以用 dynamic 來做 load balance。
+        // (i, j) 每一個任務的成本差很多
+        // 不同 octave 的影像尺寸差很大（octave 0 最大、octave 越大影像越小），掃描像素數差非常多。
+        // 每個像素不只是做常數時間：還有
+        // early reject（threshold）很快
+        // 但一旦進 extremum + refine（含多次迭代）就變很慢
+        // 所以同樣一個 (octave, scale) 的工作量也會依影像內容大幅波動。
+        // schedule(dynamic, 1) 的效果
+        // dynamic：threads 做完手上的 chunk 後，會去拿下一個 chunk（工作偷取），能自動平衡「誰先做完誰再拿更多」。
+        // chunk=1：一次只分一個 (i,j) 給 thread，負載平衡最好（但排程 overhead 較高）。
+        // 對這種「octave 0 特別重」+「refine 次數不固定」的工作，dynamic,1 通常比 static 穩定很多。
+        // collapse(2)：把兩層巢狀迴圈 for i + for j 「攤平」成一個 2D iteration space 交給 OpenMP 分配。
+        // 做完的 thread 不需要等別人，直接往下。
         #pragma omp for collapse(2) schedule(dynamic, 1) nowait
         for (int i = 0; i < dog_pyramid.num_octaves; i++) {
             for (int j = 1; j < dog_pyramid.imgs_per_octave-1; j++) {
@@ -286,6 +304,7 @@ std::vector<Keypoint> find_keypoints(const ScaleSpacePyramid& dog_pyramid, float
         }
         
         // Reduce critical section contention by collecting once per thread
+        //減少 critical section 的競爭，因為每次只讓一個 thread 進去做，所以不會有競爭。
         #pragma omp critical
         {
             keypoints.insert(keypoints.end(),
@@ -312,6 +331,10 @@ ScaleSpacePyramid generate_gradient_pyramid(const ScaleSpacePyramid& pyramid)
     }
     
     // Parallel over all octave-scale combinations with direct indexing
+    //parallel for：建立一個 thread team，並把後面的迴圈工作分配給 threads。
+    //collapse(2)：把兩層巢狀迴圈 for i + for j 「攤平」成一個 2D iteration space 交給 OpenMP 分配。
+    //schedule(static)：靜態排程。OpenMP 會在迴圈開始前就把「固定範圍」的 (i,j) 工作切給每個 thread。
+    //因為每個 octave-scale 組合的工作量幾乎一樣，所以 static 很適合。
     #pragma omp parallel for collapse(2) schedule(static)
     for (int i = 0; i < pyramid.num_octaves; i++) {
         for (int j = 0; j < pyramid.imgs_per_octave; j++) {
