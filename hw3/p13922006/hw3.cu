@@ -322,6 +322,8 @@ void write_png(const char* filename, unsigned char* image, unsigned int width, u
 }
 
 int main(int argc, char** argv) {
+    //作業規格要求執行方式是： ./hw3 x1 y1 z1 x2 y2 z2 width height filename
+    //這是 9 個參數 + 程式名，共 10 個字串，所以用 assert 直接檢查；不符就直接中止（避免後面讀 argv 越界）。
     assert(argc == 10);
 
     float camera_pos_x = atof(argv[1]);

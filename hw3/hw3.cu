@@ -18,8 +18,11 @@ struct vec2 {
 
 struct vec3 {
     float x, y, z;
-    __host__ __device__ vec3() : x(0), y(0), z(0) {}
+    // __host__ __device__ 表示這個函式可以被 host 和 device 端呼叫
+    __host__ __device__ vec3() : x(0), y(0), z(0) {} //vec3()：預設把 x,y,z 設為 0
+    //用傳進來的 xyz 初始化
     __host__ __device__ vec3(float x, float y, float z) : x(x), y(y), z(z) {}
+    //用傳進來的 v 初始化
     __host__ __device__ vec3(float v) : x(v), y(v), z(v) {}
 };
 
@@ -82,7 +85,24 @@ __host__ __device__ inline vec3 cross(const vec3& a, const vec3& b) {
 __host__ __device__ inline float length(const vec3& v) {
     return sqrtf(v.x * v.x + v.y * v.y + v.z * v.z);
 }
+//__host__ __device__ :CPU/GPU 都可以呼叫的函式
+//inline : 提示編譯器把這個函式展開成 inline 函式，避免函式呼叫的 overhead
+//一般函式的呼叫流程:
+//1.保存當前執行狀態（如：register）。
+//2.將參數 push to stack 中。
+//3.跳轉到函數的代碼位置。
+//4.執行函數。
+//5.回傳結果並恢復呼叫點的狀態。若為小型函數，呼叫的開銷可能比函數本身的執行時間大。
+//使用inline 
+//編譯器會把函數的程式碼副本放置在每個呼叫該函數的地方。
+// 沒有function call、stack push/pop 的 overhead，直接執行函數的程式碼。
 
+//const vec3& v : 用 reference 傳遞，避免複製整個 vec3
+//const：保證在 normalize() 裡不會改動呼叫者傳進來的那個 vec3
+//float len = length(v) : 計算向量長度
+//if (len > 0.0f) : 如果向量長度大於 0，則正規化
+//return vec3(v.x / len, v.y / len, v.z / len) : 正規化後的向量
+//return vec3(0.0f, 0.0f, 0.0f) : 如果向量長度為 0，則返回 0 向量
 __host__ __device__ inline vec3 normalize(const vec3& v) {
     float len = length(v);
     if (len > 0.0f) {
@@ -140,6 +160,7 @@ __constant__ float FOV = 1.5f;
 __constant__ float far_plane = 100.0f;
 
 // Store camera and resolution in constant memory
+//GPU 的 常數記憶體（constant memory），在 device（GPU）端，唯讀、快取、所有 threads 共用
 __constant__ float d_camera_pos_x, d_camera_pos_y, d_camera_pos_z;
 __constant__ float d_target_pos_x, d_target_pos_y, d_target_pos_z;
 __constant__ float d_iResolution_x, d_iResolution_y;
@@ -322,19 +343,30 @@ void write_png(const char* filename, unsigned char* image, unsigned int width, u
 }
 
 int main(int argc, char** argv) {
+    //作業規格要求執行方式是： ./hw3 x1 y1 z1 x2 y2 z2 width height filename
+    //這是 9 個參數 + 程式名，共 10 個字串，所以用 assert 直接檢查；不符就直接中止（避免後面讀 argv 越界）。
+    //argc = argument count, 命令列參數的「數量」，argc == 10 表示有 9 個參數 + 程式名
+    //argv = argument vector 
     assert(argc == 10);
 
+    //camera_pos_*：相機位置 (x1,y1,z1)
     float camera_pos_x = atof(argv[1]);
     float camera_pos_y = atof(argv[2]);
     float camera_pos_z = atof(argv[3]);
+    //target_pos_*：相機看的目標點 (x2,y2,z2)
     float target_pos_x = atof(argv[4]);
     float target_pos_y = atof(argv[5]);
     float target_pos_z = atof(argv[6]);
+    //width：輸出影像大小
     unsigned int width = atoi(argv[7]);
     unsigned int height = atoi(argv[8]);
     float iResolution_x = width;
     float iResolution_y = height;
-
+    //把 host 端的值copy到 device 端的 __constant__ 變數（例如 d_camera_pos_x）。
+    //cudaMemcpyToSymbol(symbol, src, size);
+    //symbol:device 端的 __constant__ 變數名稱
+    //src:host 端資料的位址
+    //size:複製的位元組數
     cudaMemcpyToSymbol(d_camera_pos_x, &camera_pos_x, sizeof(float));
     cudaMemcpyToSymbol(d_camera_pos_y, &camera_pos_y, sizeof(float));
     cudaMemcpyToSymbol(d_camera_pos_z, &camera_pos_z, sizeof(float));
@@ -344,6 +376,8 @@ int main(int argc, char** argv) {
     cudaMemcpyToSymbol(d_iResolution_x, &iResolution_x, sizeof(float));
     cudaMemcpyToSymbol(d_iResolution_y, &iResolution_y, sizeof(float));
 
+    // 在 CPU 端先把相機座標系（camera basis）算好，避免每個 pixel 重算
+    //型別是 vec3 變數 h_camera_pos constructor 初始化，建立物件
     vec3 h_camera_pos(camera_pos_x, camera_pos_y, camera_pos_z);
     vec3 h_target_pos(target_pos_x, target_pos_y, target_pos_z);
     vec3 h_cf = normalize(h_target_pos - h_camera_pos);
