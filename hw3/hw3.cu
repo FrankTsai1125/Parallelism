@@ -75,13 +75,14 @@ __host__ __device__ inline void operator+=(vec3& a, const vec3& b) {
 __host__ __device__ inline float dot(const vec3& a, const vec3& b) {
     return a.x * b.x + a.y * b.y + a.z * b.z;
 }
-
+//計算兩個 3D 向量的叉積（cross product），
+//結果是一個同時垂直於兩個輸入向量的向量。常用來做座標系的 right/up/forward。
 __host__ __device__ inline vec3 cross(const vec3& a, const vec3& b) {
     return vec3(a.y * b.z - a.z * b.y,
                 a.z * b.x - a.x * b.z,
                 a.x * b.y - a.y * b.x);
 }
-
+//一個向量函式，計算向量長度（歐幾里得距離）。
 __host__ __device__ inline float length(const vec3& v) {
     return sqrtf(v.x * v.x + v.y * v.y + v.z * v.z);
 }
@@ -96,13 +97,14 @@ __host__ __device__ inline float length(const vec3& v) {
 //使用inline 
 //編譯器會把函數的程式碼副本放置在每個呼叫該函數的地方。
 // 沒有function call、stack push/pop 的 overhead，直接執行函數的程式碼。
-
+//在GPU中，因為是SIMT，所以當使用inline的時候，可以避免額外的 call / return 指令與控制流程跳轉
 //const vec3& v : 用 reference 傳遞，避免複製整個 vec3
 //const：保證在 normalize() 裡不會改動呼叫者傳進來的那個 vec3
 //float len = length(v) : 計算向量長度
 //if (len > 0.0f) : 如果向量長度大於 0，則正規化
 //return vec3(v.x / len, v.y / len, v.z / len) : 正規化後的向量
 //return vec3(0.0f, 0.0f, 0.0f) : 如果向量長度為 0，則返回 0 向量
+//一個向量函式，把輸入向量變成「單位向量」（長度變成 1、方向不變）。
 __host__ __device__ inline vec3 normalize(const vec3& v) {
     float len = length(v);
     if (len > 0.0f) {
@@ -267,7 +269,12 @@ __device__ float trace(const vec3& ro, const vec3& rd, float& trap, int& ID) {
 }
 
 // Main kernel
+//希望編譯器假設 每個 block 最多 256 threads
+//希望 每個 SM（Streaming Multiprocessor）至少能同時駐留 4 個 blocks。
+//目的:用較少暫存器 → 讓 SM 同時跑更多 blocks → 提高吞吐
 __launch_bounds__(256, 4)
+//由 CPU 端用 <<<grid, block>>> 啟動
+//__global__:GPU kernel 的宣告，在 device 上跑，每個 thread 會跑這個函式一次
 __global__ void render_kernel(unsigned char* image, unsigned int width, unsigned int height) {
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     int i = blockIdx.y * blockDim.y + threadIdx.y;
@@ -336,7 +343,7 @@ __global__ void render_kernel(unsigned char* image, unsigned int width, unsigned
     image[idx + 2] = (unsigned char)fcol.z;
     image[idx + 3] = 255;
 }
-
+//在 GPU 算完、已經在 CPU 記憶體裡的 RGBA 影像，寫成一個 PNG 檔案
 void write_png(const char* filename, unsigned char* image, unsigned int width, unsigned int height) {
     unsigned error = lodepng_encode32_file(filename, image, width, height);
     if (error) printf("png error %u: %s\n", error, lodepng_error_text(error));
@@ -384,8 +391,9 @@ int main(int argc, char** argv) {
     if (length(h_cf) < 1e-6f) {
         h_cf = vec3(0.0f, 0.0f, -1.0f);
     }
-
+    //up_vector:變數名稱 會呼叫 struct vec3的 constructor 初始化，建立物件
     vec3 up_vector(0.0f, 1.0f, 0.0f);
+    // inline function
     vec3 side_candidate = cross(h_cf, up_vector);
     if (length(side_candidate) < 1e-4f) {
         up_vector = vec3(0.0f, 0.0f, 1.0f);
@@ -400,7 +408,8 @@ int main(int argc, char** argv) {
 
     float cam_length = length(h_camera_pos);
     vec3 h_sd = cam_length > 1e-6f ? h_camera_pos / cam_length : vec3(0.0f, 1.0f, 0.0f);
-
+    //make_float3 是 CUDA 提供的 helper function（在你 #include <cuda_runtime.h> 後可用）
+    //把三個 float 打包成 CUDA 的內建型別 float3（通常用來跟 CUDA API/內建向量型別搭配）
     float3 cf_const = make_float3(h_cf.x, h_cf.y, h_cf.z);
     float3 cs_const = make_float3(h_cs.x, h_cs.y, h_cs.z);
     float3 cu_const = make_float3(h_cu.x, h_cu.y, h_cu.z);
@@ -413,28 +422,40 @@ int main(int argc, char** argv) {
 
     unsigned char* d_image;
     size_t image_size = width * height * 4 * sizeof(unsigned char);
+    //cudaMalloc(&ptr, size) 是 CUDA 的「配置 GPU 記憶體」API。
+    //在 GPU (device) 上分配一塊連續記憶體，大小是 size bytes，並把那塊記憶體的位址寫到 ptr。
     cudaMalloc(&d_image, image_size);
 
-    // Use 16x16 blocks to reduce per-block register pressure and improve SM occupancy
+    //決定 GPU 上的「執行配置」：每個 block 幾個 thread（blockDim），以及總共需要幾個 block（gridDim），讓 thread 數量足夠覆蓋整張影像的所有像素。
+    //CUDA kernel 是「大量 thread 並行」在跑；你要告訴 CUDA：「每個 block 放幾個 thread」以及「總共要多少個 block」，才能讓 GPU 產生足夠的 threads 來處理 (width * height) 個像素。
+    //dim3 是 CUDA 的 3D 維度型別（有 x,y,z 欄位）。這裡等同於 blockDim.x=16, blockDim.y=16, blockDim.z=1
+    //blockDim(16,16):這是常見的 2D 影像配置：一個 block 處理一塊 16×16 的像素區塊（256 threads）。
     dim3 blockDim(16, 16);
+    //向上取整，即 ceil(a/b)width 不一定是 16 的倍數
+    //(width + blockDim.x - 1) / blockDim.x 會把「除不盡的那一點」也算進去，確保最右邊/最下面的像素也有 thread 覆蓋到。
+    //多出來的 threads 會在 kernel 裡用 if (i>=height || j>=width) return; 早退
+    //「block 的數量」（多少個 block 沿 x/y 排列）
     dim3 gridDim((width + blockDim.x - 1) / blockDim.x,
                  (height + blockDim.y - 1) / blockDim.y);
-
+    //啟動 CUDA kernel：呼叫 render_kernel 讓 GPU 真正開始算每個像素的顏色。
     render_kernel<<<gridDim, blockDim>>>(d_image, width, height);
-    
+    //立刻檢查 kernel launch 有沒有失敗：如果啟動就出錯（例如資源不足、參數不對），馬上印錯誤並退出。
+    //kernel launch 通常是非同步的，但「啟動當下」就可能失敗（例如 block 太大、shared memory/regs 超限、傳參不合法）。
+    //這行能立即抓到 launch 錯誤，否則你可能到後面才發現結果全錯或程式怪怪的。
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
         printf("Kernel launch error: %s\n", cudaGetErrorString(err));
         return 1;
     }
-
+    //cudaDeviceSynchronize() 是 CUDA 的「等待 GPU 完成工作」API。
     cudaDeviceSynchronize();
-
+    //在 CPU（host）記憶體配置一個陣列，用來接住 GPU 計算好的影像。image_size = width*height*4（RGBA）。
     unsigned char* h_image = new unsigned char[image_size];
+    //把 GPU 計算好的影像，複製回 CPU 端的 h_image 陣列。
     cudaMemcpy(h_image, d_image, image_size, cudaMemcpyDeviceToHost);
-
+    //把 h_image 這個 RGBA buffer 編碼成 PNG，寫到你命令列第 9 個參數指定的檔名
     write_png(argv[9], h_image, width, height);
-
+    //釋放 GPU 記憶體。
     cudaFree(d_image);
     delete[] h_image;
 
